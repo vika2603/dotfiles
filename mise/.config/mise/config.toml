@@ -17,8 +17,12 @@ node = "22.22.0"
 pnpm = "10.29.1"
 uv = "latest"
 xh = "latest"
+"github:can1357/oh-my-pi" = "latest"
 
 [settings]
 experimental = true
 lockfile = true
 go_set_goroot = false
+
+[settings.github]
+credential_command = "gh auth token"

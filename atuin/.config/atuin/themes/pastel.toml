@@ -1,0 +1,14 @@
+[theme]
+name = "pastel"
+parent = "marine"
+
+[colors]
+Base       = "#a6adc8"
+Title      = "#8aadf4"
+Muted      = "#6e738d"
+Annotation = "#c6a0f6"
+Guidance   = "#ffaff3"
+Important  = "#ffaff3"
+AlertInfo  = "#8bd5ca"
+AlertWarn  = "#eed49f"
+AlertError = "#ed8796"

@@ -1,28 +1,21 @@
-search_mode = "fuzzy"
-filter_mode = "workspace"
-workspaces = true
+# Atuin config. Run `atuin default-config` to see all options with docs.
+# Backup of the previous fully-commented version: ./config.toml.bak
 
 style = "compact"
-inline_height = 18
-inline_height_shell_up_key_binding = 18
-invert = true
+inline_height = 20
 show_preview = true
 max_preview_height = 4
-show_help = false
-show_tabs = false
-
 enter_accept = true
-secrets_filter = true
-update_check = false
+invert = true
 
-[theme]
-name = "marine"
-
-[search]
-filters = ["workspace", "directory", "session", "global"]
-
-[preview]
-strategy = "auto"
+[sync]
+records = true
 
 [ui]
-columns = ["duration", "time", { type = "directory", width = 24 }, "command"]
+columns = ["exit", "duration", "time", { type = "directory", width = 24 }, "command"]
+
+[theme]
+name = "pastel"
+
+[ai]
+enabled = false
