@@ -6,18 +6,15 @@ fzf = "latest"
 rg = "latest"
 zoxide = "latest"
 direnv = "latest"
-jq = "latest"
 watchexec = "latest"
 usage = "latest"
 
 buf = "latest"
 go = "1.26.3"
-k6 = "latest"
 node = "22.22.0"
-pnpm = "10.29.1"
 uv = "latest"
-xh = "latest"
-"github:can1357/oh-my-pi" = "latest"
+atuin = { version = "latest", os = ["linux", "macos/arm64"] }
+delta = "latest"
 
 [settings]
 experimental = true
