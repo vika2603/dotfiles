@@ -20,4 +20,9 @@ export GOPATH="$HOME/.local/go"
 export GOBIN="$GOPATH/bin"
 export GOTOOLCHAIN=local
 
+if { [[ ! -o interactive ]] || [[ -n "${ZSH_EXECUTION_STRING:-}" ]]; } \
+    && [[ -z "${__PATHCTL_SCRIPT:-}" ]]; then
+    eval "$(pathctl activate)"
+fi
+
 [ -f $HOME/.zshenv.local ] && source $HOME/.zshenv.local

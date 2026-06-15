@@ -1,9 +1,9 @@
 [user]
-  email = imzhongqi@gmail.com
+  email = vika.0x2606@gmail.com
   name = vika
 
-[url "git@github.com:"]
-  insteadof = https://github.com/
+[url "git@github.com:vika2603/"]
+  insteadof = https://github.com/vika2603/
 
 [init]
   defaultBranch = main

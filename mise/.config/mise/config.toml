@@ -11,10 +11,12 @@ usage = "latest"
 
 buf = "latest"
 go = "1.26.3"
-node = "22.22.0"
+node = "24"
 uv = "latest"
 atuin = { version = "latest", os = ["linux", "macos/arm64"] }
 delta = "latest"
+"cargo:tokei" = "latest"
+carapace = "latest"
 
 [settings]
 experimental = true
