@@ -1,7 +1,7 @@
 # Plugin manager (antidote) + custom fpath + deferred plugin loading.
 
 fpath=($ZDOTDIR/functions $ZDOTDIR/completions $fpath)
-autoload -Uz $ZDOTDIR/functions/*(N.:t)
+autoload -Uz $ZDOTDIR/functions/*(N-.:t)
 
 ANTIDOTE_HOME=${XDG_CACHE_HOME:-$HOME/.cache}/antidote
 export ABBR_USER_ABBREVIATIONS_FILE=$ZDOTDIR/abbreviations
