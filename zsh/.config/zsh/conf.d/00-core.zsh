@@ -45,4 +45,3 @@ export _ZO_FZF_OPTS="$FZF_DEFAULT_OPTS --height=~40% --min-height=10 --preview='
 (( $+commands[nvim] )) && EDITOR=nvim || EDITOR=vim
 export EDITOR
 
-(( $+commands[switch-ime] )) && { switch-ime com.apple.keylayout.ABC &>/dev/null &! }

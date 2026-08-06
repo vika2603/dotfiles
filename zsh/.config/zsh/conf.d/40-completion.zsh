@@ -7,6 +7,7 @@ autoload -Uz compinit
 if (( $+commands[carapace] )); then
   export CARAPACE_BRIDGES=${CARAPACE_BRIDGES:-zsh}
   export CARAPACE_EXCLUDES=${CARAPACE_EXCLUDES:-kill,killall,pkill}
+  export CARAPACE_MATCH=${CARAPACE_MATCH:-1}  # case-insensitive matching
 
   _carapace_load='
     local cache=${XDG_CACHE_HOME:-$HOME/.cache}/zsh/carapace.zsh

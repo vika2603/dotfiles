@@ -64,3 +64,5 @@ if [[ -f $_defer ]]; then
 else
   _load_deferred_plugins
 fi
+
+[[ -d /opt/homebrew/share/zsh/site-functions ]] && fpath=(/opt/homebrew/share/zsh/site-functions $fpath)
