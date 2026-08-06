@@ -50,11 +50,13 @@ _load_deferred_plugins() {
 
   eval "$(abbr export-aliases)" &>/dev/null
 
+  # fpath 的追加必须在 compinit 之前：compinit 只扫描运行那一刻的 fpath。
+  fpath=(${FORGIT_INSTALL_DIR}/completions $fpath)
+
   compinit
   _comp_options+=(globdots)
   source $base/Aloxaf/fzf-tab/fzf-tab.plugin.zsh
   _fsh_theme
-  fpath=(${FORGIT_INSTALL_DIR}/completions $fpath)
 }
 
 local _defer=$ANTIDOTE_HOME/github.com/romkatv/zsh-defer/zsh-defer.plugin.zsh
