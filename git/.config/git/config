@@ -2,9 +2,6 @@
   email = vika.0x2606@gmail.com
   name = vika
 
-[url "git@github.com:vika2603/"]
-  insteadof = https://github.com/vika2603/
-
 [init]
   defaultBranch = main
 
@@ -13,6 +10,7 @@
   pager = delta
   untrackedcache = true
   fsmonitor = false
+  quotepath = false
 
 [interactive]
   diffFilter = delta --color-only
