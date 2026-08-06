@@ -5,7 +5,6 @@ fd = { version = "latest", os = ["linux", "macos/arm64"] }
 fzf = "latest"
 rg = "latest"
 zoxide = "latest"
-direnv = "latest"
 watchexec = "latest"
 usage = "latest"
 
@@ -17,6 +16,7 @@ atuin = { version = "latest", os = ["linux", "macos/arm64"] }
 delta = "latest"
 "cargo:tokei" = "latest"
 carapace = "latest"
+lazygit = "latest"
 
 [settings]
 experimental = true

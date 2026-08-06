@@ -15,7 +15,6 @@ $git_state\
 $git_status\
 $fill\
 $jobs\
-$direnv\
 $docker_context\
 $c\
 $rust\
@@ -91,14 +90,6 @@ stashed = "[≡](os_cyan) "
 symbol = " "
 style = "bold os_cyan"
 format = "[$symbol$number]($style) "
-
-[direnv]
-disabled = false
-symbol = " "
-style = "bold success_green"
-format = "[$symbol$loaded]($style) "
-loaded_msg = "env"
-unloaded_msg = "env?"
 
 [docker_context]
 symbol = ""
