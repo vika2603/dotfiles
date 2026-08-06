@@ -6,7 +6,8 @@ autoload -Uz compinit
 
 if (( $+commands[carapace] )); then
   export CARAPACE_BRIDGES=${CARAPACE_BRIDGES:-zsh}
-  export CARAPACE_EXCLUDES=${CARAPACE_EXCLUDES:-kill,killall,pkill}
+  # git: zsh 原生 _git 更快更全，carapace 每次 Tab 有 ~30ms spawn 开销
+  export CARAPACE_EXCLUDES=${CARAPACE_EXCLUDES:-kill,killall,pkill,git}
   export CARAPACE_MATCH=${CARAPACE_MATCH:-1}  # case-insensitive matching
 
   _carapace_load='
@@ -21,7 +22,7 @@ if (( $+commands[carapace] )); then
     source $cache
   '
   if (( $+functions[zsh-defer] )); then
-    zsh-defer -c $_carapace_load
+    zsh-defer -m -p -c $_carapace_load
   else
     eval $_carapace_load
   fi
