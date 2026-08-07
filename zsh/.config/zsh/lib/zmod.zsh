@@ -31,7 +31,7 @@
 # If zsh-defer is missing, defer modules run inline in the same order.
 
 typeset -gA _zmod_after _zmod_before _zmod_phase _zmod_status _zmod_ms _zmod_file
-typeset -ga _zmod_names _zmod_order _zmod_fpath_sealed _zmod_bad_files _zmod_bad_decls
+typeset -ga _zmod_names _zmod_order _zmod_fpath_sealed _zmod_bad_decls
 # No initialiser: re-sourcing this file must not reset the guard, or
 # `source ~/.zshrc` would re-run every module.
 typeset -g _zmod_ran _zmod_degraded _zmod_fpath_is_sealed
@@ -173,10 +173,8 @@ zmod::resolve() {
 # default, exec zsh inherits it and the new default never applies — you need a
 # brand new terminal. Warn at the moment it happens rather than waiting for
 # someone to think of running a diagnostic.
-typeset -gA _zmod_env_want
 zmod::env_default() {
   local var=$1 val=$2
-  _zmod_env_want[$var]=$val
   export $var=${(P)var:-$val}
   [[ ${(P)var} == $val ]] || print -ru2 \
     "zmod: $var is '${(P)var}' inherited from a parent shell, config wants '$val' — exec zsh cannot change it, open a new terminal"
@@ -185,15 +183,31 @@ zmod::env_default() {
 
 # A conditional alias fails silently: when the command is absent the alias is
 # simply never defined, which is indistinguishable from a config that never
-# wanted it. Declaring the intent lets the mismatch be reported.
+# wanted it. Record the intent; zmod::verify checks it once everything has run.
+#
+# The check cannot happen here. The failure being guarded against is running
+# too early — a module scheduled before the one that puts the command on PATH
+# sees $+commands as false and takes the "not installed" branch legitimately.
+# Only a pass after every module has run can tell the two cases apart.
 typeset -gA _zmod_alias_want
 zmod::alias_if() {
   local cmd=$1 name=$2 body=$3
   _zmod_alias_want[$name]=$cmd
-  (( $+commands[$cmd] )) || return 0
-  alias $name="$body"
-  [[ -n ${aliases[$name]} ]] || print -ru2 \
-    "zmod: $cmd is installed but alias '$name' was not defined"
+  (( $+commands[$cmd] )) && alias $name="$body"
+  return 0
+}
+
+# Final pass, queued after every module. Reports what only becomes knowable
+# once the whole configuration is in place.
+zmod::verify() {
+  local name cmd
+  zmod::check_fpath
+  for name in ${(ok)_zmod_alias_want}; do
+    cmd=${_zmod_alias_want[$name]}
+    (( $+commands[$cmd] )) || continue
+    [[ -n ${aliases[$name]} ]] || print -ru2 \
+      "zmod: $cmd is on PATH but alias '$name' was never defined — the module defining it likely runs before the one providing $cmd"
+  done
   return 0
 }
 
@@ -287,7 +301,7 @@ zmod::load() {
 
   local m
   local -i read_count=0
-  _zmod_bad_files=() _zmod_bad_decls=()
+  _zmod_bad_decls=()
   for m in $ZDOTDIR/modules/*.zsh(N-.); do
     (( read_count++ ))
     zmod::_read_header $m
@@ -314,7 +328,7 @@ zmod::load() {
   local -a deferred
   for m in $_zmod_order; do
     if [[ ${_zmod_phase[$m]} == sync ]]; then
-      zmod::_run_file $m || _zmod_bad_files+=(${_zmod_file[$m]:t})
+      zmod::_run_file $m
     else
       deferred+=($m)
     fi
@@ -327,13 +341,13 @@ zmod::load() {
     if (( ${+functions[zsh-defer]} )); then
       zsh-defer -1 -2 -m -p -c "zmod::_run_file ${(q)m}"
     else
-      zmod::_run_file $m || _zmod_bad_files+=(${_zmod_file[$m]:t})
+      zmod::_run_file $m
     fi
   done
 
   if (( ${+functions[zsh-defer]} )); then
-    zsh-defer -1 -2 -m -p -c 'zmod::check_fpath'
+    zsh-defer -1 -2 -m -p -c 'zmod::verify'
   else
-    zmod::check_fpath
+    zmod::verify
   fi
 }

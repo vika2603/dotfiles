@@ -1,0 +1,53 @@
+# Show the module graph and loader state.
+#
+# This reports, it does not judge. Everything that can go wrong announces
+# itself when it happens: dependency errors and module failures at load,
+# fpath violations and unfulfilled alias declarations in zmod::verify once
+# every module has run, inherited environment defaults in zmod::env_default.
+# A health command you must remember to run cannot help with a failure you
+# have no reason to suspect.
+emulate -L zsh
+
+(( ${+functions[zmod::load]} )) || {
+  print -P "%F{red}zmod is not loaded in this shell%f"
+  return 1
+}
+
+local m phase line dep
+
+(( _zmod_degraded )) && \
+  print -P "%F{red}DEGRADED%f dependency resolution failed; declaration order in use\n"
+
+if (( ! $#_zmod_order )); then
+  print -P "%F{red}no modules resolved%f (load state: ${_zmod_load_state:-never})"
+  return 1
+fi
+
+for phase in sync defer; do
+  print -P "%F{242}$phase%f"
+  for m in $_zmod_order; do
+    [[ ${_zmod_phase[$m]} == $phase ]] || continue
+    line="  ${(r:20:)m}"
+    case ${_zmod_status[$m]:-pending} in
+      ok)      line+=" %F{green}ok     %f" ;;
+      failed)  line+=" %F{red}FAILED %f" ;;
+      missing) line+=" %F{red}MISSING%f" ;;
+      *)       line+=" %F{yellow}pending%f" ;;
+    esac
+    dep=""
+    [[ -n ${_zmod_after[$m]}  ]] && dep+=" after:${_zmod_after[$m]}"
+    [[ -n ${_zmod_before[$m]} ]] && dep+=" before:${_zmod_before[$m]}"
+    [[ -n $dep ]] && line+=" %F{242}$dep%f"
+    [[ -n ${_zmod_ms[$m]} ]] && line+=$(printf ' %F{242}%.1fms%%f' ${_zmod_ms[$m]})
+    print -P -- $line
+  done
+done
+
+(( $#_zmod_bad_decls )) && {
+  print -P "\n%F{red}rejected headers%f"
+  for m in "${_zmod_bad_decls[@]}"; do print -r -- "  $m"; done
+}
+
+print -P "\n%F{242}fpath $( (( _zmod_fpath_is_sealed )) \
+  && print "sealed, ${#_zmod_fpath_sealed} entries" || print 'not sealed yet' ) · ${#_comps} completions · ZSH_TRACE=1 exec zsh for timings%f"
+return 0
