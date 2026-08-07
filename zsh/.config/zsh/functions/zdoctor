@@ -98,7 +98,16 @@ fi
 (( $#notes )) && { print -P "%F{yellow}notes%f"; zdoctor::_lines "${notes[@]}" }
 unfunction zdoctor::_lines
 
-(( verbose )) || { (( $#problems )) && print -P "%F{242}  zdoctor -v for the module graph%f"; return }
+# Exit status is the verdict, so zdoctor can gate a script. Every return below
+# is explicit: a bare `return` yields the status of the preceding command,
+# which made the healthy path exit 1 because `(( $#problems ))` was false.
+local -i rc=0
+(( $#problems )) && rc=1
+
+if (( ! verbose )); then
+  (( $#problems )) && print -P "%F{242}  zdoctor -v for the module graph%f"
+  return $rc
+fi
 
 # --- verbose: loader internals ----------------------------------------------
 print -P "\n%BModules%b (${#_zmod_names})  every sync module runs, then every defer module"
@@ -131,3 +140,4 @@ printf '  %-20s %s\n' 'fpath'        "$( (( _zmod_fpath_is_sealed )) \
 printf '  %-20s %s\n' 'declarations' "${#_zmod_names} accepted, ${#_zmod_bad_decls} rejected"
 printf '  %-20s %s\n' 'files'        "${#_zmod_bad_files} returned non-zero"
 print -P "\n%F{242}ZSH_TRACE=1 exec zsh   per-module timings%f"
+return $rc
