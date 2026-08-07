@@ -36,3 +36,7 @@ fi
 # zsh-defer must be available before zmod::load registers deferred modules.
 local defer=$ANTIDOTE_HOME/github.com/romkatv/zsh-defer/zsh-defer.plugin.zsh
 [[ -f $defer ]] && source $defer
+
+# The last statement above is an optional step; without this the module would
+# report failure whenever it is legitimately skipped.
+return 0

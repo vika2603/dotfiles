@@ -29,6 +29,15 @@
 # of every module.
 #
 # If zsh-defer is missing, defer modules run inline in the same order.
+#
+# Shell options set by a defer-phase module do not persist: zsh-defer runs its
+# queue under `emulate -L zsh`, which restores options on return. The inline
+# fallback deliberately does the same so a module behaves identically whether
+# or not zsh-defer is installed. Anything that must change options durably
+# belongs in a sync module.
+#
+# Alias expansion is owned by the loader while a file is sourced, so a module
+# cannot durably unsetopt aliases either.
 
 typeset -gA _zmod_after _zmod_before _zmod_phase _zmod_status _zmod_ms _zmod_file
 typeset -ga _zmod_names _zmod_order _zmod_fpath_sealed _zmod_bad_decls
@@ -64,23 +73,39 @@ zmod::_read_header() {
     return 1
   }
 
+  # `read` returns non-zero on a final line with no newline, so the loop body
+  # would be skipped for a file that is nothing but a header. Feed it a
+  # guaranteed terminator instead of trusting the file to end cleanly.
+  local -i _zmod_seen=0
   while IFS= read -r _zmod_line; do
-    [[ $_zmod_line == '#zmod'(| *) ]] && { _zmod_spec=${_zmod_line#\#zmod}; break }
+    if [[ $_zmod_line == '#zmod'(| *) ]]; then
+      (( _zmod_seen++ )) && {
+        zmod::_hdr_err "${_zmod_path:t}: more than one '#zmod' line"; return 1
+      }
+      _zmod_spec=${_zmod_line#\#zmod}
+      continue                  # keep reading: a second header must be caught
+    fi
     [[ $_zmod_line == \#* || -z ${_zmod_line// } ]] && continue
     break                       # first real line: the header block is over
-  done < $_zmod_path
+  done < <(cat -- $_zmod_path; print)
 
-  [[ -n ${_zmod_spec-} || $_zmod_line == '#zmod'(| *) ]] || {
+  (( _zmod_seen )) || {
     zmod::_hdr_err "${_zmod_path:t}: no '#zmod' header line"
     return 1
   }
 
+  local -A _zmod_seen_key
   for _zmod_kv in ${=_zmod_spec}; do
     [[ $_zmod_kv == *=* ]] || {
       zmod::_hdr_err "$_zmod_name: '$_zmod_kv' is not key=value"; return 1
     }
     _zmod_key=${_zmod_kv%%=*} _zmod_val=${_zmod_kv#*=}
     [[ -n $_zmod_val ]] || { zmod::_hdr_err "$_zmod_name: '$_zmod_key' has an empty value"; return 1 }
+    # Last-one-wins would silently discard whichever the author meant.
+    (( ${+_zmod_seen_key[$_zmod_key]} )) && {
+      zmod::_hdr_err "$_zmod_name: '$_zmod_key' given more than once"; return 1
+    }
+    _zmod_seen_key[$_zmod_key]=1
 
     case $_zmod_key in
       after|before)
@@ -201,6 +226,11 @@ zmod::alias_if() {
 # once the whole configuration is in place.
 zmod::verify() {
   local name cmd
+  # A claimed invariant that is only checked when someone remembered to arm it
+  # is not enforced. If the completion module finished without sealing, every
+  # later fpath change goes unreported.
+  [[ ${_zmod_status[completion]} == ok ]] && (( ! _zmod_fpath_is_sealed )) && print -ru2 \
+    "zmod: completion module finished without calling zmod::seal_fpath; fpath is unguarded"
   zmod::check_fpath
   for name in ${(ok)_zmod_alias_want}; do
     cmd=${_zmod_alias_want[$name]}
@@ -241,11 +271,25 @@ zmod::_run_file() {
   [[ -o aliases ]] && _zmod_aliases_on=1
   unsetopt aliases
 
-  source $_zmod_f
-  local -i _zmod_rc=$?
-
-  (( _zmod_aliases_on )) && setopt aliases
-  (( _zmod_rc == 0 )) && _zmod_status[$_zmod_n]=ok || _zmod_status[$_zmod_n]=failed
+  # `always` so the option is restored and the status recorded even if the
+  # caller has ERR_RETURN set, which would otherwise abort this function at the
+  # source line and skip both.
+  local -i _zmod_rc=0
+  {
+    source $_zmod_f
+  } always {
+    # Read the status here rather than after the source: under ERR_RETURN a
+    # failing source leaves the try list immediately, so an assignment placed
+    # after it never runs and the module is recorded as successful.
+    _zmod_rc=$?
+    (( _zmod_aliases_on )) && setopt aliases
+    if (( _zmod_rc == 0 )); then
+      _zmod_status[$_zmod_n]=ok
+    else
+      _zmod_status[$_zmod_n]=failed
+      print -ru2 "zmod: module '$_zmod_n' returned $_zmod_rc (${_zmod_f:t})"
+    fi
+  }
 
   if (( _zmod_timing )); then
     _zmod_ms[$_zmod_n]=$(( (EPOCHREALTIME - _zmod_t0) * 1000 ))
@@ -258,6 +302,14 @@ zmod::_run_file() {
 # Called by the completion module once it is done. Anything that touches fpath
 # after this point has completions compinit will never see. Kept as an array;
 # serialising to a delimited string breaks on a path containing the delimiter.
+# zsh-defer executes its queue under `emulate -L zsh`, so option changes made
+# by a deferred module are rolled back. LOCAL_OPTIONS gives the inline fallback
+# the same contract, so the presence of zsh-defer never changes the outcome.
+zmod::_run_inline() {
+  setopt localoptions
+  zmod::_run_file $1
+}
+
 zmod::seal_fpath() { _zmod_fpath_sealed=($fpath); _zmod_fpath_is_sealed=1 }
 
 zmod::check_fpath() {
@@ -341,7 +393,7 @@ zmod::load() {
     if (( ${+functions[zsh-defer]} )); then
       zsh-defer -1 -2 -m -p -c "zmod::_run_file ${(q)m}"
     else
-      zmod::_run_file $m
+      zmod::_run_inline $m
     fi
   done
 

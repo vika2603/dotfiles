@@ -33,7 +33,13 @@ Alias expansion is disabled while a module is sourced, so module code behaves
 like a script rather than inheriting `rm -i`, `grep --colour` and friends.
 
 `source` reports only a file's last command, so it cannot prove a module
-succeeded throughout: write fatal steps as `cmd || return 1`.
+succeeded throughout: write fatal steps as `cmd || return 1`, and end a file
+with `return 0` when its last statement is an optional step that may legitimately
+fail — otherwise the module is reported as failed.
+
+Shell options set by a `defer` module do not persist: zsh-defer runs its queue
+under `emulate -L zsh`. Put anything that must change options durably in a
+`sync` module.
 
 A `sync` module may not depend on a `defer` module; declaring it is an error.
 

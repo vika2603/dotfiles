@@ -24,3 +24,7 @@ if [[ ! -r $cache || $commands[carapace] -nt $cache || ! -r $sig || "$(< $sig)" 
   fi
 fi
 [[ -r $cache ]] && source $cache
+
+# The last statement above is an optional step; without this the module would
+# report failure whenever it is legitimately skipped.
+return 0
