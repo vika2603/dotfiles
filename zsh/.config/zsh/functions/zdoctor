@@ -2,6 +2,13 @@
 # whether the loader's invariants still hold.
 emulate -L zsh
 
+# Without the loader in this shell every variable below is unset, and an unset
+# variable must not be read as a healthy state.
+(( ${+functions[zmod::load]} )) || {
+  print -P "%F{red}zmod is not loaded in this shell%f — source \$ZDOTDIR/lib/zmod.zsh first"
+  return 1
+}
+
 local m dep line
 
 if (( _zmod_degraded )); then
@@ -84,17 +91,26 @@ else
   print -P "  %F{yellow}--%f   no module has run yet"
 fi
 
-if [[ $_zmod_load_state == never ]]; then
-  print -P "  %F{yellow}--%f   module files: zmod::load was never called"
-elif [[ $_zmod_load_state == preflight-failed ]]; then
-  print -P "  %F{red}FAIL%f no module files were read: \$ZDOTDIR/modules unusable"
-else
-  (( $#_zmod_bad_files )) \
-    && print -P "  %F{red}FAIL%f module files that failed to source: ${(j:, :)_zmod_bad_files}" \
-    || print -P "  %F{green}ok%f   every module file sourced cleanly"
-  (( $#_zmod_bad_decls )) \
-    && print -P "  %F{red}FAIL%f rejected declarations: ${(j:; :)_zmod_bad_decls}" \
-    || print -P "  %F{green}ok%f   every declaration accepted"
+case ${_zmod_load_state:-never} in
+  never)            print -P "  %F{yellow}--%f   module files: zmod::load was never called" ;;
+  preflight-failed) print -P "  %F{red}FAIL%f no module files were read: \$ZDOTDIR/modules unusable" ;;
+  no-files)         print -P "  %F{red}FAIL%f \$ZDOTDIR/modules contains no .zsh files" ;;
+  *)
+    # 'returned zero' is the whole claim: source reports only the status of the
+    # last command in a file, so a mid-file failure is invisible here. The
+    # declaration line below is the one that actually inspects content.
+    (( $#_zmod_bad_files )) \
+      && print -P "  %F{red}FAIL%f module files that returned non-zero: ${(j:, :)_zmod_bad_files}" \
+      || print -P "  %F{green}ok%f   every module file returned zero" ;;
+esac
+if [[ ${_zmod_load_state:-never} == sourced ]]; then
+  if (( $#_zmod_bad_decls )); then
+    print -P "  %F{red}FAIL%f rejected declarations: ${(j:; :)_zmod_bad_decls}"
+  elif (( $#_zmod_names )); then
+    print -P "  %F{green}ok%f   all ${#_zmod_names} declarations accepted"
+  else
+    print -P "  %F{red}FAIL%f module files were read but declared nothing"
+  fi
 fi
 
 print -P "\n%BEnvironment defaults%b"

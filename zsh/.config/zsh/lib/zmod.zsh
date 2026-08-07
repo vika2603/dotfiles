@@ -26,8 +26,8 @@ typeset -ga _zmod_names _zmod_order
 # `source ~/.zshrc` would re-run every module.
 typeset -ga _zmod_fpath_sealed _zmod_bad_files _zmod_bad_decls
 typeset -g _zmod_ran _zmod_degraded _zmod_fpath_is_sealed
-# never | preflight-failed | sourced — a boolean cannot tell 'no files read'
-# apart from 'all files read cleanly', and both would report green.
+# never | preflight-failed | no-files | sourced — each state a report must be
+# able to tell apart, since 'nothing to check' is not 'everything checked'.
 typeset -g _zmod_load_state _zmod_reg_closed
 : ${_zmod_ran:=0} ${_zmod_degraded:=0} ${_zmod_fpath_is_sealed:=0}
 : ${_zmod_load_state:=never} ${_zmod_reg_closed:=0}
@@ -230,7 +230,14 @@ zmod::check_fpath() {
 }
 
 zmod::load() {
-  (( _zmod_ran )) && { print -ru2 "zmod: already loaded, ignoring repeat call"; return 0 }
+  # Re-sourcing a newer lib into a shell that already loaded resets the new
+  # bookkeeping variables while _zmod_ran survives, so close registration here
+  # too: otherwise late zmod() calls would be accepted and never run.
+  (( _zmod_ran )) && {
+    _zmod_reg_closed=1
+    print -ru2 "zmod: already loaded, ignoring repeat call"
+    return 0
+  }
 
   # Diagnostic state, recorded before anything can fail: a load that dies in
   # preflight must not be reported as never attempted, nor as having read
@@ -249,11 +256,13 @@ zmod::load() {
   # its absence only shows up later as a missing-dependency error somewhere
   # else, or not at all if nothing depends on it.
   local m
-  _zmod_load_state=sourced
+  local -i read_count=0
   _zmod_bad_files=() _zmod_bad_decls=()
   for m in $ZDOTDIR/modules/*.zsh(N); do
+    (( read_count++ ))
     source $m || _zmod_bad_files+=(${m:t})
   done
+  (( read_count )) && _zmod_load_state=sourced || _zmod_load_state=no-files
 
   (( $#_zmod_bad_files )) && \
     print -ru2 "zmod: these module files failed to source: ${(j:, :)_zmod_bad_files}"
