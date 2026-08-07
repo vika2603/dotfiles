@@ -26,9 +26,11 @@ typeset -ga _zmod_names _zmod_order
 # `source ~/.zshrc` would re-run every module.
 typeset -ga _zmod_fpath_sealed _zmod_bad_files _zmod_bad_decls
 typeset -g _zmod_ran _zmod_degraded _zmod_fpath_is_sealed
-typeset -g _zmod_load_attempted _zmod_reg_closed
+# never | preflight-failed | sourced — a boolean cannot tell 'no files read'
+# apart from 'all files read cleanly', and both would report green.
+typeset -g _zmod_load_state _zmod_reg_closed
 : ${_zmod_ran:=0} ${_zmod_degraded:=0} ${_zmod_fpath_is_sealed:=0}
-: ${_zmod_load_attempted:=0} ${_zmod_reg_closed:=0}
+: ${_zmod_load_state:=never} ${_zmod_reg_closed:=0}
 
 # `source` reports the status of the last command in the file, and a module
 # file ends with a function definition that always succeeds. A failed
@@ -230,20 +232,24 @@ zmod::check_fpath() {
 zmod::load() {
   (( _zmod_ran )) && { print -ru2 "zmod: already loaded, ignoring repeat call"; return 0 }
 
-  # Set the guard only once loading is certain to proceed. Setting it before
-  # the checks would make a failed load permanent — a corrected retry in the
-  # same shell would be refused as "already loaded".
+  # Diagnostic state, recorded before anything can fail: a load that dies in
+  # preflight must not be reported as never attempted, nor as having read
+  # every module file cleanly.
+  _zmod_load_state=preflight-failed
+
+  # The _zmod_ran / _zmod_reg_closed guards are set only once loading is
+  # certain to proceed. Setting them before the checks would make a failed load
+  # permanent: a corrected retry in the same shell could not recover.
   [[ -n $ZDOTDIR && -d $ZDOTDIR/modules ]] || {
     print -ru2 "zmod: \$ZDOTDIR/modules not found (ZDOTDIR='${ZDOTDIR}') — nothing loaded"
     return 1
   }
 
-  _zmod_load_attempted=1
-
   # A module file that fails to source registers nothing. Without reporting it,
   # its absence only shows up later as a missing-dependency error somewhere
   # else, or not at all if nothing depends on it.
   local m
+  _zmod_load_state=sourced
   _zmod_bad_files=() _zmod_bad_decls=()
   for m in $ZDOTDIR/modules/*.zsh(N); do
     source $m || _zmod_bad_files+=(${m:t})

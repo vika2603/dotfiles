@@ -75,8 +75,10 @@ done
   && print -P "  %F{red}FAIL%f modules did not complete: ${(j:, :)broken}" \
   || print -P "  %F{green}ok%f   every module that ran returned success"
 
-if (( ! _zmod_load_attempted )); then
+if [[ $_zmod_load_state == never ]]; then
   print -P "  %F{yellow}--%f   module files: zmod::load was never called"
+elif [[ $_zmod_load_state == preflight-failed ]]; then
+  print -P "  %F{red}FAIL%f no module files were read: \$ZDOTDIR/modules unusable"
 else
   (( $#_zmod_bad_files )) \
     && print -P "  %F{red}FAIL%f module files that failed to source: ${(j:, :)_zmod_bad_files}" \
