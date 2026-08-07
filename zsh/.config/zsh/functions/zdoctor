@@ -95,13 +95,16 @@ case ${_zmod_load_state:-never} in
   never)            print -P "  %F{yellow}--%f   module files: zmod::load was never called" ;;
   preflight-failed) print -P "  %F{red}FAIL%f no module files were read: \$ZDOTDIR/modules unusable" ;;
   no-files)         print -P "  %F{red}FAIL%f \$ZDOTDIR/modules contains no .zsh files" ;;
-  *)
+  sourced)
     # 'returned zero' is the whole claim: source reports only the status of the
     # last command in a file, so a mid-file failure is invisible here. The
     # declaration line below is the one that actually inspects content.
     (( $#_zmod_bad_files )) \
       && print -P "  %F{red}FAIL%f module files that returned non-zero: ${(j:, :)_zmod_bad_files}" \
       || print -P "  %F{green}ok%f   every module file returned zero" ;;
+  # Success must be an explicit state, never the fallthrough: an unrecognised
+  # value is a state nothing here has evidence about.
+  *) print -P "  %F{red}FAIL%f unknown load state '$_zmod_load_state'" ;;
 esac
 if [[ ${_zmod_load_state:-never} == sourced ]]; then
   if (( $#_zmod_bad_decls )); then
