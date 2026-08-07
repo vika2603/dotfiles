@@ -28,11 +28,20 @@ typeset -g _zmod_ran _zmod_degraded _zmod_fpath_snapshot
 : ${_zmod_ran:=0} ${_zmod_degraded:=0}
 
 zmod() {
-  local name=$1; shift
+  # The name pattern below uses the # repetition operator. Registration happens
+  # before any module body runs, so EXTENDED_GLOB is not set yet globally.
+  setopt localoptions extended_glob
   local phase=sync
   local -a after before
 
-  [[ -n $name ]] || { print -ru2 "zmod: missing module name"; return 1 }
+  (( $# )) || { print -ru2 "zmod: missing module name"; return 1 }
+  local name=$1; shift
+
+  # The name becomes part of a function name (zmod:<name>) and is used as an
+  # associative-array key and in pattern tests, so keep it to safe characters.
+  [[ $name == [A-Za-z_][A-Za-z0-9_-]# ]] || {
+    print -ru2 "zmod: invalid module name '$name' (use letters, digits, - and _)"; return 1
+  }
   (( ${+_zmod_phase[$name]} )) && { print -ru2 "zmod: duplicate module '$name'"; return 1 }
 
   while (( $# )); do
