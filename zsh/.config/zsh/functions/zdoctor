@@ -52,9 +52,15 @@ elif zmod::check_fpath 2>/dev/null; then
 else
   print -P "  %F{red}FAIL%f fpath changed after sealing — see the zmod: error above"
 fi
-(( ${#_comps} )) \
-  && print -P "  %F{green}ok%f   completion table populated (${#_comps} entries)" \
-  || print -P "  %F{red}FAIL%f completion table is empty"
+# Only meaningful once the module responsible has actually run — reporting FAIL
+# for work that is merely pending trains you to ignore this output.
+if [[ ${_zmod_status[completion]} != ok ]]; then
+  print -P "  %F{yellow}--%f   completion table: completion module has not run yet"
+elif (( ${#_comps} )); then
+  print -P "  %F{green}ok%f   completion table populated (${#_comps} entries)"
+else
+  print -P "  %F{red}FAIL%f completion table is empty"
+fi
 
 local -a broken
 for m in $_zmod_names; do
@@ -82,12 +88,14 @@ fi
 
 print -P "\n%BCaches%b"
 local cc=${XDG_CACHE_HOME:-$HOME/.cache}/zsh/carapace.zsh
-if [[ -r $cc && -r $cc.sig ]]; then
-  [[ "$(< $cc.sig)" == "${CARAPACE_BRIDGES}|${CARAPACE_EXCLUDES}" ]] \
-    && print -P "  %F{green}ok%f   carapace" \
-    || print -P "  %F{yellow}--%f   carapace stale, rebuilds next start"
+if [[ ${_zmod_status[carapace]} != ok ]]; then
+  print -P "  %F{yellow}--%f   carapace: module has not run yet"
+elif [[ ! -r $cc || ! -r $cc.sig ]]; then
+  print -P "  %F{yellow}--%f   carapace cache absent"
+elif [[ "$(< $cc.sig)" == "${CARAPACE_BRIDGES}|${CARAPACE_EXCLUDES}" ]]; then
+  print -P "  %F{green}ok%f   carapace"
 else
-  print -P "  %F{yellow}--%f   carapace absent"
+  print -P "  %F{yellow}--%f   carapace stale, rebuilds next start"
 fi
 [[ $ZDOTDIR/.zsh_plugins.txt -nt $ZDOTDIR/.zsh_plugins.zsh ]] \
   && print -P "  %F{yellow}--%f   antidote bundle stale, rebuilds next start" \
