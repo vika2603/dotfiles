@@ -1,16 +1,16 @@
-# carapace 用一条 compdef 接管约 2000 个命令，所以必须在 compinit 之后。
+# carapace claims ~2000 commands with a single compdef, so it must run after compinit.
 zmod carapace --after completion --phase defer
 
 zmod:carapace() {
   (( $+commands[carapace] )) || return 0
 
   zmod::env_default CARAPACE_BRIDGES zsh
-  # git: zsh 原生 _git 更快更全，carapace 每次 Tab 有 ~30ms spawn 开销
+  # git: zsh's native _git is faster and more complete; carapace costs ~30ms per Tab
   zmod::env_default CARAPACE_EXCLUDES kill,killall,pkill,git
   zmod::env_default CARAPACE_MATCH 1   # case-insensitive matching
 
-  # 只有 BRIDGES 和 EXCLUDES 会改变生成的脚本，MATCH 是运行时读取，
-  # 所以签名里不含 MATCH——加进去会导致无谓的重建。
+  # Only BRIDGES and EXCLUDES change the generated script; MATCH is read at
+  # runtime, so it is deliberately absent from the signature.
   local cache=${XDG_CACHE_HOME:-$HOME/.cache}/zsh/carapace.zsh
   local sig=$cache.sig
   local want="${CARAPACE_BRIDGES}|${CARAPACE_EXCLUDES}"

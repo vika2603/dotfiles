@@ -1,4 +1,6 @@
-zmod aliases --after core
+# ls/cat test for eza/bat with $+commands, and both come from mise, so this must
+# run after tools has done `mise activate`. The old config relied on 50 > 30.
+zmod aliases --after tools
 
 zmod:aliases() {
   (( $+commands[eza] )) && alias ls='eza -bh --icons --hyperlink'

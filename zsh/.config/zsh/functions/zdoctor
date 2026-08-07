@@ -1,81 +1,99 @@
-# 检查模块图和启动期不变量。改完配置后跑一次，比人眼看输出可靠。
+# Report the state of the module system: what loaded, in what order, and
+# whether the loader's invariants still hold.
 emulate -L zsh
 
-local -a ok bad
 local m dep line
 
 if (( _zmod_degraded )); then
-  print -P "%F{red}%B降级模式%b%f 依赖解析失败，当前用声明顺序加载，顺序不保证正确"
-  print -P "%F{red}       启动时的 zmod: 报错说明了是哪条依赖写错了%f\n"
+  print -P "%F{red}%BDEGRADED%b%f dependency resolution failed; declaration order in use"
+  print -P "%F{red}         the zmod: error printed at startup names the bad dependency%f\n"
 fi
 
-print -P "%B模块%b (${#_zmod_names})  解析顺序即执行顺序"
-if (( ! $#_zmod_order )); then
-  print -P "  %F{red}依赖未解析——zmod::load 没跑完或解析失败%f"
-else
-  for m in $_zmod_order; do
-    line="  ${(r:20:)m} ${(r:6:)_zmod_phase[$m]}"
-    case ${_zmod_status[$m]:-未运行} in
-      ok)      line+=" %F{green}✓%f" ;;
-      failed)  line+=" %F{red}✗ 模块体返回非零%f" ;;
-      missing) line+=" %F{red}✗ 未定义 zmod:$m%f" ;;
-      *)       line+=" %F{yellow}· 未运行（defer 未到）%f" ;;
-    esac
-    dep=""
-    [[ -n ${_zmod_after[$m]}  ]] && dep+=" after:${_zmod_after[$m]}"
-    [[ -n ${_zmod_before[$m]} ]] && dep+=" before:${_zmod_before[$m]}"
-    [[ -n $dep ]] && line+="  %F{242}${dep}%f"
-    [[ -n ${_zmod_ms[$m]} ]] && line+=$(printf ' %F{242}%.1fms%%f' ${_zmod_ms[$m]})
-    print -P -- $line
-  done
-fi
-
-print -P "\n%B不变量%b"
-if [[ -z $_zmod_fpath_snapshot ]]; then
-  print -P "  %F{yellow}·%f compinit 尚未运行，fpath 未封存"
-elif zmod::check_fpath 2>/dev/null; then
-  print -P "  %F{green}✓%f compinit 之后 fpath 未被修改"
-else
-  print -P "  %F{red}✗%f fpath 在 compinit 之后被修改（详见上方 zmod 报错）"
-fi
-(( $+functions[compinit] )) && (( ${#_comps} )) \
-  && print -P "  %F{green}✓%f compinit 已运行，_comps ${#_comps} 条" \
-  || print -P "  %F{red}✗%f 补全表为空"
-
-print -P "\n%B补全抽查%b"
-for m in git git-forgit mise; do
-  [[ -n ${_comps[$m]} ]] \
-    && print -P "  %F{green}✓%f ${(r:12:)m} → ${_comps[$m]}" \
-    || print -P "  %F{red}✗%f ${(r:12:)m} → 未注册"
+# Execution is partitioned by phase: every sync module runs, then every defer
+# module. Within a phase the resolved order holds.
+local -a sync_mods defer_mods
+for m in $_zmod_order; do
+  [[ ${_zmod_phase[$m]} == sync ]] && sync_mods+=($m) || defer_mods+=($m)
 done
 
-print -P "\n%B环境变量%b"
+zdoctor::_row() {
+  local m=$1
+  line="  ${(r:20:)m}"
+  case ${_zmod_status[$m]:-pending} in
+    ok)      line+=" %F{green}ok     %f" ;;
+    failed)  line+=" %F{red}FAILED %f" ;;
+    missing) line+=" %F{red}MISSING%f" ;;
+    *)       line+=" %F{yellow}pending%f" ;;
+  esac
+  dep=""
+  [[ -n ${_zmod_after[$m]}  ]] && dep+=" after:${_zmod_after[$m]}"
+  [[ -n ${_zmod_before[$m]} ]] && dep+=" before:${_zmod_before[$m]}"
+  [[ -n $dep ]] && line+=" %F{242}${dep}%f"
+  [[ -n ${_zmod_ms[$m]} ]] && line+=$(printf ' %F{242}%.1fms%%f' ${_zmod_ms[$m]})
+  print -P -- $line
+}
+
+if (( ! $#_zmod_order )); then
+  print -P "%BModules%b  %F{red}not resolved — zmod::load did not complete%f"
+else
+  print -P "%BModules%b (${#_zmod_names})  sync phase runs first, then defer"
+  print -P "%F{242}  sync%f"
+  for m in $sync_mods;  do zdoctor::_row $m; done
+  print -P "%F{242}  defer%f"
+  for m in $defer_mods; do zdoctor::_row $m; done
+fi
+unfunction zdoctor::_row
+
+print -P "\n%BInvariants%b"
+if [[ -z $_zmod_fpath_snapshot ]]; then
+  print -P "  %F{yellow}--%f   fpath not sealed yet (completion module pending)"
+elif zmod::check_fpath 2>/dev/null; then
+  print -P "  %F{green}ok%f   fpath unchanged since it was sealed"
+else
+  print -P "  %F{red}FAIL%f fpath changed after sealing — see the zmod: error above"
+fi
+(( ${#_comps} )) \
+  && print -P "  %F{green}ok%f   completion table populated (${#_comps} entries)" \
+  || print -P "  %F{red}FAIL%f completion table is empty"
+
+local -a broken
+for m in $_zmod_names; do
+  [[ ${_zmod_status[$m]} == (failed|missing) ]] && broken+=($m)
+done
+(( $#broken )) \
+  && print -P "  %F{red}FAIL%f modules did not complete: ${(j:, :)broken}" \
+  || print -P "  %F{green}ok%f   every module that ran returned success"
+
+print -P "\n%BEnvironment defaults%b"
 if (( ${#_zmod_env_want} )); then
   local var stale=0
   for var in ${(ok)_zmod_env_want}; do
     if [[ ${(P)var} == ${_zmod_env_want[$var]} ]]; then
-      print -P "  %F{green}✓%f ${(r:20:)var} ${(P)var}"
+      print -P "  %F{green}ok%f   ${(r:22:)var} ${(P)var}"
     else
       stale=1
-      print -P "  %F{red}✗%f ${(r:20:)var} 实际 '${(P)var}' ≠ 配置 '${_zmod_env_want[$var]}'"
+      print -P "  %F{red}FAIL%f ${(r:22:)var} live '${(P)var}' != config '${_zmod_env_want[$var]}'"
     fi
   done
-  (( stale )) && print -P "    %F{yellow}父 shell 继承了旧值，exec zsh 改不掉。开新终端，或 unset 后重来。%f"
+  (( stale )) && print -P "       %F{yellow}inherited from a parent shell; exec zsh cannot override it, open a new terminal%f"
 else
-  print -P "  %F{yellow}·%f 尚无记录（defer 模块未运行）"
+  print -P "  %F{yellow}--%f   none recorded yet"
 fi
 
-print -P "\n%B缓存%b"
+print -P "\n%BCaches%b"
 local cc=${XDG_CACHE_HOME:-$HOME/.cache}/zsh/carapace.zsh
-if [[ -r $cc ]]; then
+if [[ -r $cc && -r $cc.sig ]]; then
   [[ "$(< $cc.sig)" == "${CARAPACE_BRIDGES}|${CARAPACE_EXCLUDES}" ]] \
-    && print -P "  %F{green}✓%f carapace 签名匹配" \
-    || print -P "  %F{yellow}·%f carapace 签名过期，下次启动重建"
+    && print -P "  %F{green}ok%f   carapace" \
+    || print -P "  %F{yellow}--%f   carapace stale, rebuilds next start"
 else
-  print -P "  %F{yellow}·%f carapace 缓存不存在"
+  print -P "  %F{yellow}--%f   carapace absent"
 fi
 [[ $ZDOTDIR/.zsh_plugins.txt -nt $ZDOTDIR/.zsh_plugins.zsh ]] \
-  && print -P "  %F{yellow}·%f antidote bundle 过期，下次启动重建" \
-  || print -P "  %F{green}✓%f antidote bundle 新鲜"
+  && print -P "  %F{yellow}--%f   antidote bundle stale, rebuilds next start" \
+  || print -P "  %F{green}ok%f   antidote bundle"
+[[ $ZDOTDIR/.zcompdump -nt $ZDOTDIR/completions ]] \
+  && print -P "  %F{green}ok%f   .zcompdump newer than completions/" \
+  || print -P "  %F{yellow}--%f   .zcompdump older than completions/; rm it and exec zsh"
 
-print -P "\n%F{242}ZSH_TRACE=1 exec zsh 可看每个模块耗时%f"
+print -P "\n%F{242}ZSH_TRACE=1 exec zsh   per-module timings%f"

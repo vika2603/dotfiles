@@ -1,4 +1,4 @@
-# 绑定用到 _fancy_ctrl_z / _sudo_prepend，两者由 fpath 模块 autoload。
+# Bindings use _fancy_ctrl_z and _sudo_prepend, autoloaded by the fpath module.
 zmod keybindings --after fpath
 
 zmod:keybindings() {

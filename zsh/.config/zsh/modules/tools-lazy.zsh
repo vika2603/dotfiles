@@ -1,4 +1,4 @@
-# 提示符之后再初始化的工具，缺失时静默跳过。
+# Tools initialised after the prompt; skipped silently when absent.
 zmod tools-lazy --after tools --phase defer
 
 zmod:tools-lazy() {

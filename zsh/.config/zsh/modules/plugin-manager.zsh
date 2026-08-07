@@ -1,6 +1,6 @@
-# antidote 只负责下载。插件全是 kind:clone，由 plugins 模块手动 source。
-# 本模块同步执行，因为 .zsh_plugins.zsh 会改 fpath，且 zsh-defer 必须在
-# 任何 defer 模块注册前就位。
+# antidote only downloads. Every plugin is kind:clone and sourced manually by
+# the plugins module. This runs sync because .zsh_plugins.zsh modifies fpath and
+# zsh-defer must exist before any defer module is registered.
 zmod plugin-manager --after fpath
 
 zmod:plugin-manager() {
@@ -20,8 +20,8 @@ zmod:plugin-manager() {
   fi
   source $antidote_zsh
 
-  # 打包到临时文件再 mv -f：clone 失败时 $out 不被破坏，
-  # 下次启动 `$src -nt $out` 仍成立会重试，而不是缓存一个空 bundle。
+  # Bundle to a temp file then mv -f, so a failed clone leaves $out untouched and
+  # the `$src -nt $out` check retries next startup instead of caching an empty bundle.
   local src=$ZDOTDIR/.zsh_plugins.txt out=$ZDOTDIR/.zsh_plugins.zsh
   if [[ ! -f $out || $src -nt $out ]]; then
     local tmp=$out.tmp.$$
@@ -34,7 +34,7 @@ zmod:plugin-manager() {
   fi
   [[ -f $out ]] && source $out
 
-  # zsh-defer 必须在 zmod::load 注册 defer 模块之前可用。
+  # zsh-defer must be available before zmod::load registers deferred modules.
   local defer=$ANTIDOTE_HOME/github.com/romkatv/zsh-defer/zsh-defer.plugin.zsh
   [[ -f $defer ]] && source $defer
   return 0

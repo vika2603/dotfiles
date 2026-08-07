@@ -1,4 +1,4 @@
-# zstyle 在补全发生时才被读取，所以不依赖 compinit，同步设置即可。
+# zstyles are read when completion happens, so they do not depend on compinit.
 zmod completion-styles --after core
 
 zmod:completion-styles() {
