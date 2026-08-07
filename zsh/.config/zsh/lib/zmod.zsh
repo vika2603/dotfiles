@@ -57,7 +57,10 @@ zmod::_hdr_err() {
 # Read the leading comment block of a file and register what it declares.
 # Nothing in the file is executed here.
 zmod::_read_header() {
-  setopt localoptions extended_glob
+  # no_err_return: the loader's own control flow uses `[[ ]] && { }` throughout,
+  # which returns non-zero whenever the condition is false. A caller's
+  # ERR_RETURN would abort parsing at the first such statement.
+  setopt localoptions extended_glob no_err_return
   local _zmod_path=$1
   local _zmod_name=${${_zmod_path:t}:r}
   local _zmod_line _zmod_spec _zmod_kv _zmod_key _zmod_val _zmod_part
@@ -73,21 +76,25 @@ zmod::_read_header() {
     return 1
   }
 
-  # `read` returns non-zero on a final line with no newline, so the loop body
-  # would be skipped for a file that is nothing but a header. Feed it a
-  # guaranteed terminator instead of trusting the file to end cleanly.
+  # $(<file) is a builtin read with no fork, and splitting on newlines handles
+  # a missing final newline without needing to append a terminator. `read` in a
+  # loop would skip an unterminated last line, and a process substitution to
+  # work around that costs a subprocess per module at every startup.
   local -i _zmod_seen=0
-  while IFS= read -r _zmod_line; do
+  local -a _zmod_lines
+  _zmod_lines=("${(@f)$(<$_zmod_path)}")
+  for _zmod_line in "${_zmod_lines[@]}"; do
     if [[ $_zmod_line == '#zmod'(| *) ]]; then
-      (( _zmod_seen++ )) && {
+      (( _zmod_seen )) && {
         zmod::_hdr_err "${_zmod_path:t}: more than one '#zmod' line"; return 1
       }
+      _zmod_seen=1
       _zmod_spec=${_zmod_line#\#zmod}
       continue                  # keep reading: a second header must be caught
     fi
     [[ $_zmod_line == \#* || -z ${_zmod_line// } ]] && continue
     break                       # first real line: the header block is over
-  done < <(cat -- $_zmod_path; print)
+  done
 
   (( _zmod_seen )) || {
     zmod::_hdr_err "${_zmod_path:t}: no '#zmod' header line"
@@ -137,6 +144,7 @@ zmod::_read_header() {
 
 # Resolve the dependency graph into _zmod_order. Non-zero on failure.
 zmod::resolve() {
+  setopt localoptions no_err_return
   local -A indeg edges
   local n dep
   local -a ready
@@ -155,7 +163,7 @@ zmod::resolve() {
         print -ru2 "zmod: sync module '$n' cannot depend on defer module '$dep'"; return 1
       }
       edges[$dep]+="$n "
-      (( indeg[$n]++ ))
+      (( indeg[$n] += 1 ))
     done
     for dep in ${(s:,:)_zmod_before[$n]}; do
       [[ -n $dep ]] || continue
@@ -166,7 +174,7 @@ zmod::resolve() {
         print -ru2 "zmod: defer module '$n' declares before=$dep, a sync module: unsatisfiable"; return 1
       }
       edges[$n]+="$dep "
-      (( indeg[$dep]++ ))
+      (( indeg[$dep] += 1 ))
     done
   done
 
@@ -179,7 +187,7 @@ zmod::resolve() {
     n=$ready[1]; shift ready
     _zmod_order+=($n)
     for dep in ${=edges[$n]}; do
-      (( indeg[$dep]-- ))
+      (( indeg[$dep] -= 1 ))
       if (( indeg[$dep] == 0 )); then
         local -a merged; merged=($ready $dep)
         ready=(${(@)_zmod_names:*merged})
@@ -306,7 +314,11 @@ zmod::_run_file() {
 # by a deferred module are rolled back. LOCAL_OPTIONS gives the inline fallback
 # the same contract, so the presence of zsh-defer never changes the outcome.
 zmod::_run_inline() {
-  setopt localoptions
+  # zsh-defer resumes its queue under `emulate -L zsh`, which both resets
+  # options to zsh defaults for the module and rolls them back afterwards.
+  # Matching only the rollback would still let a module see EXTENDED_GLOB on
+  # here and off there.
+  emulate -L zsh
   zmod::_run_file $1
 }
 
@@ -340,6 +352,21 @@ zmod::check_fpath() {
 }
 
 zmod::load() {
+  # LOCAL_OPTIONS is not usable here: it would roll back every setopt a sync
+  # module performs. Toggle ERR_RETURN by hand and restore it in an always
+  # block so every exit path is covered. Modules therefore run without it,
+  # matching what zsh-defer's `emulate -L zsh` already does for defer modules.
+  local -i _zmod_er=0
+  [[ -o err_return ]] && _zmod_er=1
+  unsetopt err_return
+  {
+    zmod::_load_body "$@"
+  } always {
+    (( _zmod_er )) && setopt err_return
+  }
+}
+
+zmod::_load_body() {
   (( _zmod_ran )) && { print -ru2 "zmod: already loaded, ignoring repeat call"; return 0 }
 
   # Guards are set only once loading is certain to proceed; setting them before
@@ -355,7 +382,7 @@ zmod::load() {
   local -i read_count=0
   _zmod_bad_decls=()
   for m in $ZDOTDIR/modules/*.zsh(N-.); do
-    (( read_count++ ))
+    (( read_count += 1 ))
     zmod::_read_header $m
   done
   (( read_count )) && _zmod_load_state=sourced || _zmod_load_state=no-files
@@ -380,7 +407,7 @@ zmod::load() {
   local -a deferred
   for m in $_zmod_order; do
     if [[ ${_zmod_phase[$m]} == sync ]]; then
-      zmod::_run_file $m
+      zmod::_run_file $m || true
     else
       deferred+=($m)
     fi
@@ -391,9 +418,9 @@ zmod::load() {
   # module emits is discarded.
   for m in $deferred; do
     if (( ${+functions[zsh-defer]} )); then
-      zsh-defer -1 -2 -m -p -c "zmod::_run_file ${(q)m}"
+      zsh-defer -1 -2 -m -p -c "zmod::_run_file ${(q)m} || true"
     else
-      zmod::_run_inline $m
+      zmod::_run_inline $m || true
     fi
   done
 
