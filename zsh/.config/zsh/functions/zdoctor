@@ -1,0 +1,81 @@
+# 检查模块图和启动期不变量。改完配置后跑一次，比人眼看输出可靠。
+emulate -L zsh
+
+local -a ok bad
+local m dep line
+
+if (( _zmod_degraded )); then
+  print -P "%F{red}%B降级模式%b%f 依赖解析失败，当前用声明顺序加载，顺序不保证正确"
+  print -P "%F{red}       启动时的 zmod: 报错说明了是哪条依赖写错了%f\n"
+fi
+
+print -P "%B模块%b (${#_zmod_names})  解析顺序即执行顺序"
+if (( ! $#_zmod_order )); then
+  print -P "  %F{red}依赖未解析——zmod::load 没跑完或解析失败%f"
+else
+  for m in $_zmod_order; do
+    line="  ${(r:20:)m} ${(r:6:)_zmod_phase[$m]}"
+    case ${_zmod_status[$m]:-未运行} in
+      ok)      line+=" %F{green}✓%f" ;;
+      failed)  line+=" %F{red}✗ 模块体返回非零%f" ;;
+      missing) line+=" %F{red}✗ 未定义 zmod:$m%f" ;;
+      *)       line+=" %F{yellow}· 未运行（defer 未到）%f" ;;
+    esac
+    dep=""
+    [[ -n ${_zmod_after[$m]}  ]] && dep+=" after:${_zmod_after[$m]}"
+    [[ -n ${_zmod_before[$m]} ]] && dep+=" before:${_zmod_before[$m]}"
+    [[ -n $dep ]] && line+="  %F{242}${dep}%f"
+    [[ -n ${_zmod_ms[$m]} ]] && line+=$(printf ' %F{242}%.1fms%%f' ${_zmod_ms[$m]})
+    print -P -- $line
+  done
+fi
+
+print -P "\n%B不变量%b"
+if [[ -z $_zmod_fpath_snapshot ]]; then
+  print -P "  %F{yellow}·%f compinit 尚未运行，fpath 未封存"
+elif zmod::check_fpath 2>/dev/null; then
+  print -P "  %F{green}✓%f compinit 之后 fpath 未被修改"
+else
+  print -P "  %F{red}✗%f fpath 在 compinit 之后被修改（详见上方 zmod 报错）"
+fi
+(( $+functions[compinit] )) && (( ${#_comps} )) \
+  && print -P "  %F{green}✓%f compinit 已运行，_comps ${#_comps} 条" \
+  || print -P "  %F{red}✗%f 补全表为空"
+
+print -P "\n%B补全抽查%b"
+for m in git git-forgit mise; do
+  [[ -n ${_comps[$m]} ]] \
+    && print -P "  %F{green}✓%f ${(r:12:)m} → ${_comps[$m]}" \
+    || print -P "  %F{red}✗%f ${(r:12:)m} → 未注册"
+done
+
+print -P "\n%B环境变量%b"
+if (( ${#_zmod_env_want} )); then
+  local var stale=0
+  for var in ${(ok)_zmod_env_want}; do
+    if [[ ${(P)var} == ${_zmod_env_want[$var]} ]]; then
+      print -P "  %F{green}✓%f ${(r:20:)var} ${(P)var}"
+    else
+      stale=1
+      print -P "  %F{red}✗%f ${(r:20:)var} 实际 '${(P)var}' ≠ 配置 '${_zmod_env_want[$var]}'"
+    fi
+  done
+  (( stale )) && print -P "    %F{yellow}父 shell 继承了旧值，exec zsh 改不掉。开新终端，或 unset 后重来。%f"
+else
+  print -P "  %F{yellow}·%f 尚无记录（defer 模块未运行）"
+fi
+
+print -P "\n%B缓存%b"
+local cc=${XDG_CACHE_HOME:-$HOME/.cache}/zsh/carapace.zsh
+if [[ -r $cc ]]; then
+  [[ "$(< $cc.sig)" == "${CARAPACE_BRIDGES}|${CARAPACE_EXCLUDES}" ]] \
+    && print -P "  %F{green}✓%f carapace 签名匹配" \
+    || print -P "  %F{yellow}·%f carapace 签名过期，下次启动重建"
+else
+  print -P "  %F{yellow}·%f carapace 缓存不存在"
+fi
+[[ $ZDOTDIR/.zsh_plugins.txt -nt $ZDOTDIR/.zsh_plugins.zsh ]] \
+  && print -P "  %F{yellow}·%f antidote bundle 过期，下次启动重建" \
+  || print -P "  %F{green}✓%f antidote bundle 新鲜"
+
+print -P "\n%F{242}ZSH_TRACE=1 exec zsh 可看每个模块耗时%f"

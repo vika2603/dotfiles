@@ -1,10 +1,15 @@
 *
 !.gitignore
+!README.md
 !.zshrc
-!conf.d/
-!conf.d/*
+!lib/
+!lib/*
+!modules/
+!modules/*
 !functions/
 !functions/*
+!completions/
+!completions/*
 !bin/
 !bin/*
 !.zsh_plugins.txt
