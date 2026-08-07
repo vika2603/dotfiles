@@ -45,9 +45,12 @@ A `sync` module may not depend on a `defer` module; declaring it is an error.
 
 ## Two enforced invariants
 
-**1. compinit is the fpath deadline.** Once the `completion` module finishes,
-fpath is sealed. Anything added later is never scanned, so those completions are
-never registered. `zmod::check_fpath` reports the offending directory at startup.
+**1. compinit is the fpath deadline.** The `completion` module calls
+`zmod::seal_fpath` once it has finished; anything added to fpath afterwards is
+never scanned, so those completions are never registered. `zmod::verify` runs
+after every module and names the offending directory — and reports it as a
+failure if the completion module finished without sealing at all, since an
+invariant nobody armed is not enforced.
 
 Modules that add a completion directory must declare `before=completion`.
 `modules/forgit-completion.zsh` is the worked example.

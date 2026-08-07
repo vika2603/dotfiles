@@ -256,17 +256,15 @@ zmod::_run_file() {
   local _zmod_n=$1 _zmod_t0 _zmod_timing=0
   local _zmod_f=${_zmod_file[$_zmod_n]}
 
-  [[ -r $_zmod_f ]] && {
-    # Without zsh/datetime EPOCHREALTIME is unset and arithmetic silently
-    # yields 0, so every module would report 0.0ms. Say so instead.
-    [[ -n $ZSH_TRACE ]] && (( ${+EPOCHREALTIME} )) && { _zmod_timing=1; _zmod_t0=$EPOCHREALTIME }
-  }
-
   if [[ ! -r $_zmod_f ]]; then
     _zmod_status[$_zmod_n]=missing
     print -ru2 "zmod: module file for '$_zmod_n' is unreadable: $_zmod_f"
     return 1
   fi
+
+  # Without zsh/datetime EPOCHREALTIME is unset and arithmetic silently yields
+  # 0, so every module would report 0.0ms. Say so instead.
+  [[ -n $ZSH_TRACE ]] && (( ${+EPOCHREALTIME} )) && { _zmod_timing=1; _zmod_t0=$EPOCHREALTIME }
 
   # Aliases are expanded when a file is parsed, and modules are parsed as they
   # run — so anything after the aliases module would inherit the user's
@@ -297,31 +295,31 @@ zmod::_run_file() {
       _zmod_status[$_zmod_n]=failed
       print -ru2 "zmod: module '$_zmod_n' returned $_zmod_rc (${_zmod_f:t})"
     fi
-  }
 
-  if (( _zmod_timing )); then
-    _zmod_ms[$_zmod_n]=$(( (EPOCHREALTIME - _zmod_t0) * 1000 ))
-    printf '%-6s %7.1fms  %s\n' ${_zmod_phase[$_zmod_n]} ${_zmod_ms[$_zmod_n]} $_zmod_n
-  elif [[ -n $ZSH_TRACE ]]; then
-    printf '%-6s %9s  %s\n' ${_zmod_phase[$_zmod_n]} 'no clock' $_zmod_n
-  fi
+    # Inside the always block too: under a caller's ERR_RETURN the function
+    # returns as soon as this block ends, so a trace line placed after it would
+    # be printed for successful modules and silently skipped for failed ones.
+    if (( _zmod_timing )); then
+      _zmod_ms[$_zmod_n]=$(( (EPOCHREALTIME - _zmod_t0) * 1000 ))
+      printf '%-6s %7.1fms  %s\n' ${_zmod_phase[$_zmod_n]} ${_zmod_ms[$_zmod_n]} $_zmod_n
+    elif [[ -n $ZSH_TRACE ]]; then
+      printf '%-6s %9s  %s\n' ${_zmod_phase[$_zmod_n]} 'no clock' $_zmod_n
+    fi
+  }
+}
+
+# zsh-defer resumes its queue under `emulate -L zsh`, which both resets options
+# to zsh defaults for the module and rolls them back afterwards. The inline
+# fallback matches that exactly; matching only the rollback would still let a
+# module see EXTENDED_GLOB on here and off there.
+zmod::_run_inline() {
+  emulate -L zsh
+  zmod::_run_file $1
 }
 
 # Called by the completion module once it is done. Anything that touches fpath
 # after this point has completions compinit will never see. Kept as an array;
 # serialising to a delimited string breaks on a path containing the delimiter.
-# zsh-defer executes its queue under `emulate -L zsh`, so option changes made
-# by a deferred module are rolled back. LOCAL_OPTIONS gives the inline fallback
-# the same contract, so the presence of zsh-defer never changes the outcome.
-zmod::_run_inline() {
-  # zsh-defer resumes its queue under `emulate -L zsh`, which both resets
-  # options to zsh defaults for the module and rolls them back afterwards.
-  # Matching only the rollback would still let a module see EXTENDED_GLOB on
-  # here and off there.
-  emulate -L zsh
-  zmod::_run_file $1
-}
-
 zmod::seal_fpath() { _zmod_fpath_sealed=($fpath); _zmod_fpath_is_sealed=1 }
 
 zmod::check_fpath() {
