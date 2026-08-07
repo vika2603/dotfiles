@@ -81,6 +81,8 @@ zdoctor -v           # also the module graph and loader state
 ZSH_TRACE=1 exec zsh # per-module timings
 ```
 
+Exit status is the verdict: 0 healthy, 1 problems found.
+
 `zdoctor` checks capabilities rather than loader bookkeeping, so it catches a
 module that returned success without having any effect:
 
