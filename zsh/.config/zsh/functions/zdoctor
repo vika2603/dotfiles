@@ -45,7 +45,7 @@ fi
 unfunction zdoctor::_row
 
 print -P "\n%BInvariants%b"
-if [[ -z $_zmod_fpath_snapshot ]]; then
+if (( ! _zmod_fpath_is_sealed )); then
   print -P "  %F{yellow}--%f   fpath not sealed yet (completion module pending)"
 elif zmod::check_fpath 2>/dev/null; then
   print -P "  %F{green}ok%f   fpath unchanged since it was sealed"

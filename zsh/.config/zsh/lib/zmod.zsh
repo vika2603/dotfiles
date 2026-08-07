@@ -24,8 +24,9 @@ typeset -gA _zmod_after _zmod_before _zmod_phase _zmod_status _zmod_ms
 typeset -ga _zmod_names _zmod_order
 # No initialiser: re-sourcing this file must not reset the guard, or
 # `source ~/.zshrc` would re-run every module.
-typeset -g _zmod_ran _zmod_degraded _zmod_fpath_snapshot
-: ${_zmod_ran:=0} ${_zmod_degraded:=0}
+typeset -ga _zmod_fpath_sealed
+typeset -g _zmod_ran _zmod_degraded _zmod_fpath_is_sealed
+: ${_zmod_ran:=0} ${_zmod_degraded:=0} ${_zmod_fpath_is_sealed:=0}
 
 zmod() {
   # The name pattern below uses the # repetition operator. Registration happens
@@ -156,16 +157,19 @@ zmod::_run_one() {
 
 # Called by the completion module once it is done. Anything that touches fpath
 # after this point has completions that compinit will never see.
-zmod::seal_fpath() { _zmod_fpath_snapshot="${(j:|:)fpath}" }
+# The snapshot is kept as an array; serialising it to a delimited string would
+# break on any path containing the delimiter.
+zmod::seal_fpath() { _zmod_fpath_sealed=($fpath); _zmod_fpath_is_sealed=1 }
 
 zmod::check_fpath() {
-  [[ -n $_zmod_fpath_snapshot ]] || return 0
-  [[ "${(j:|:)fpath}" == "$_zmod_fpath_snapshot" ]] && return 0
-  local -a sealed added
-  sealed=(${(s:|:)_zmod_fpath_snapshot})
-  added=(${fpath:|sealed})
-  print -ru2 "zmod: fpath was modified after compinit; completions in these directories are not registered:"
-  print -ru2 "      ${(j:\n      :)added}"
+  (( _zmod_fpath_is_sealed )) || return 0
+  local -a added removed
+  added=(${fpath:|_zmod_fpath_sealed})
+  removed=(${_zmod_fpath_sealed:|fpath})
+  (( $#added || $#removed )) || return 0
+  print -ru2 "zmod: fpath changed after it was sealed; compinit never scanned these:"
+  (( $#added ))   && print -ru2 "      added:   ${(j:\n               :)added}"
+  (( $#removed )) && print -ru2 "      removed: ${(j:\n               :)removed}"
   print -ru2 "      fix: give the module that modifies fpath '--before completion'"
   return 1
 }
