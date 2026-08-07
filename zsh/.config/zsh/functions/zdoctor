@@ -46,7 +46,10 @@ unfunction zdoctor::_row
 
 print -P "\n%BInvariants%b"
 if (( ! _zmod_fpath_is_sealed )); then
-  print -P "  %F{yellow}--%f   fpath not sealed yet (completion module pending)"
+  case ${_zmod_status[completion]:-pending} in
+    failed|missing) print -P "  %F{red}FAIL%f fpath never sealed: completion module ${_zmod_status[completion]}" ;;
+    *)              print -P "  %F{yellow}--%f   fpath not sealed yet: completion module still pending" ;;
+  esac
 elif zmod::check_fpath 2>/dev/null; then
   print -P "  %F{green}ok%f   fpath unchanged since it was sealed"
 else
@@ -70,6 +73,10 @@ done
 (( $#broken )) \
   && print -P "  %F{red}FAIL%f modules did not complete: ${(j:, :)broken}" \
   || print -P "  %F{green}ok%f   every module that ran returned success"
+
+(( $#_zmod_bad_files )) \
+  && print -P "  %F{red}FAIL%f module files that failed to load: ${(j:, :)_zmod_bad_files}" \
+  || print -P "  %F{green}ok%f   every module file sourced cleanly"
 
 print -P "\n%BEnvironment defaults%b"
 if (( ${#_zmod_env_want} )); then

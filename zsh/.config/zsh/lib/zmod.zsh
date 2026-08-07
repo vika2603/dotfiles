@@ -24,7 +24,7 @@ typeset -gA _zmod_after _zmod_before _zmod_phase _zmod_status _zmod_ms
 typeset -ga _zmod_names _zmod_order
 # No initialiser: re-sourcing this file must not reset the guard, or
 # `source ~/.zshrc` would re-run every module.
-typeset -ga _zmod_fpath_sealed
+typeset -ga _zmod_fpath_sealed _zmod_bad_files
 typeset -g _zmod_ran _zmod_degraded _zmod_fpath_is_sealed
 : ${_zmod_ran:=0} ${_zmod_degraded:=0} ${_zmod_fpath_is_sealed:=0}
 
@@ -45,6 +45,8 @@ zmod() {
   }
   (( ${+_zmod_phase[$name]} )) && { print -ru2 "zmod: duplicate module '$name'"; return 1 }
 
+  local phase_seen=0 dep
+  local -a parts
   while (( $# )); do
     # Validate before shifting: `shift 2` with one argument left fails without
     # consuming anything, which turns this loop into an infinite one at startup.
@@ -53,17 +55,32 @@ zmod() {
         (( $# >= 2 )) || { print -ru2 "zmod: $name: $1 requires a value"; return 1 } ;;
       *) print -ru2 "zmod: $name: unknown argument '$1'"; return 1 ;;
     esac
+
+    # A malformed dependency list must not silently degrade into "no
+    # dependency" — that removes an ordering constraint the author intended.
+    if [[ $1 == --after || $1 == --before ]]; then
+      [[ -n $2 ]] || { print -ru2 "zmod: $name: $1 has an empty value"; return 1 }
+      parts=("${(@s:,:)2}")
+      # Quote the expansion: an unquoted array in a for loop drops empty
+      # elements, which would skip exactly the entries being checked for.
+      for dep in "${parts[@]}"; do
+        [[ -n $dep ]] || { print -ru2 "zmod: $name: $1 '$2' has an empty entry"; return 1 }
+      done
+    fi
+
     case $1 in
-      --after)  after+=(${(s:,:)2})  ;;
-      --before) before+=(${(s:,:)2}) ;;
-      --phase)  phase=$2             ;;
+      --after)  after+=($parts)  ;;
+      --before) before+=($parts) ;;
+      --phase)
+        (( phase_seen )) && { print -ru2 "zmod: $name: --phase given more than once"; return 1 }
+        phase_seen=1
+        [[ $2 == sync || $2 == defer ]] || {
+          print -ru2 "zmod: $name: --phase must be sync or defer, got '$2'"; return 1
+        }
+        phase=$2 ;;
     esac
     shift 2
   done
-
-  [[ $phase == sync || $phase == defer ]] || {
-    print -ru2 "zmod: $name: --phase must be sync or defer, got '$phase'"; return 1
-  }
 
   _zmod_names+=($name)
   _zmod_after[$name]=${(j:,:)after}
@@ -163,13 +180,27 @@ zmod::seal_fpath() { _zmod_fpath_sealed=($fpath); _zmod_fpath_is_sealed=1 }
 
 zmod::check_fpath() {
   (( _zmod_fpath_is_sealed )) || return 0
+
+  # Exact positional comparison: fpath order decides which definition wins when
+  # two directories provide the same function, so a reorder is a real change
+  # even though the set is identical.
+  local -i i same=1
+  if (( $#fpath == $#_zmod_fpath_sealed )); then
+    for (( i = 1; i <= $#fpath; i++ )); do
+      [[ $fpath[i] == $_zmod_fpath_sealed[i] ]] || { same=0; break }
+    done
+  else
+    same=0
+  fi
+  (( same )) && return 0
+
   local -a added removed
   added=(${fpath:|_zmod_fpath_sealed})
   removed=(${_zmod_fpath_sealed:|fpath})
-  (( $#added || $#removed )) || return 0
-  print -ru2 "zmod: fpath changed after it was sealed; compinit never scanned these:"
+  print -ru2 "zmod: fpath changed after it was sealed; compinit's scan is stale:"
   (( $#added ))   && print -ru2 "      added:   ${(j:\n               :)added}"
   (( $#removed )) && print -ru2 "      removed: ${(j:\n               :)removed}"
+  (( $#added || $#removed )) || print -ru2 "      reordered (same entries, different precedence)"
   print -ru2 "      fix: give the module that modifies fpath '--before completion'"
   return 1
 }
@@ -185,8 +216,16 @@ zmod::load() {
     return 1
   }
 
+  # A module file that fails to source registers nothing. Without reporting it,
+  # its absence only shows up later as a missing-dependency error somewhere
+  # else, or not at all if nothing depends on it.
   local m
-  for m in $ZDOTDIR/modules/*.zsh(N); do source $m; done
+  _zmod_bad_files=()
+  for m in $ZDOTDIR/modules/*.zsh(N); do
+    source $m || _zmod_bad_files+=(${m:t})
+  done
+  (( $#_zmod_bad_files )) && \
+    print -ru2 "zmod: these module files failed to load: ${(j:, :)_zmod_bad_files}"
   (( $#_zmod_names )) || { print -ru2 "zmod: no modules found in $ZDOTDIR/modules"; return 1 }
   _zmod_ran=1
 
