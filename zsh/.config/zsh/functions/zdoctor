@@ -67,13 +67,22 @@ case ${_zmod_status[completion]:-pending} in
   *)  print -P "  %F{yellow}--%f   completion table: module still pending" ;;
 esac
 
-local -a broken
+# Vacuously true over an empty set, so say nothing ran rather than print a
+# green tick that is backed by no module at all.
+local -a broken ran
 for m in $_zmod_names; do
-  [[ ${_zmod_status[$m]} == (failed|missing) ]] && broken+=($m)
+  case ${_zmod_status[$m]} in
+    failed|missing) broken+=($m) ;;
+    ok)             ran+=($m) ;;
+  esac
 done
-(( $#broken )) \
-  && print -P "  %F{red}FAIL%f modules did not complete: ${(j:, :)broken}" \
-  || print -P "  %F{green}ok%f   every module that ran returned success"
+if (( $#broken )); then
+  print -P "  %F{red}FAIL%f modules did not complete: ${(j:, :)broken}"
+elif (( $#ran )); then
+  print -P "  %F{green}ok%f   all ${#ran} modules that ran returned success"
+else
+  print -P "  %F{yellow}--%f   no module has run yet"
+fi
 
 if [[ $_zmod_load_state == never ]]; then
   print -P "  %F{yellow}--%f   module files: zmod::load was never called"
