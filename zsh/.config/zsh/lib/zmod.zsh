@@ -164,11 +164,18 @@ zmod::_run_one() {
     print -ru2 "zmod: module '$n' is declared but zmod:$n is not defined"
     return 1
   fi
-  [[ -n $ZSH_TRACE ]] && t0=$EPOCHREALTIME
+  # Without zsh/datetime EPOCHREALTIME is unset and arithmetic silently yields
+  # 0, so every module would be reported as taking 0.0ms. Say so instead.
+  local timing=0
+  [[ -n $ZSH_TRACE ]] && (( ${+EPOCHREALTIME} )) && { timing=1; t0=$EPOCHREALTIME }
+
   if zmod:$n; then _zmod_status[$n]=ok; else _zmod_status[$n]=failed; fi
-  if [[ -n $ZSH_TRACE ]]; then
+
+  if (( timing )); then
     _zmod_ms[$n]=$(( (EPOCHREALTIME - t0) * 1000 ))
     printf '%-6s %7.1fms  %s\n' ${_zmod_phase[$n]} ${_zmod_ms[$n]} $n
+  elif [[ -n $ZSH_TRACE ]]; then
+    printf '%-6s %9s  %s\n' ${_zmod_phase[$n]} 'no clock' $n
   fi
 }
 
