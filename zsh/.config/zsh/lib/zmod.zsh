@@ -1,108 +1,113 @@
-# zmod: module registration and dependency resolution.
+# zmod: module scheduling for modules/*.zsh
 #
-# Each modules/*.zsh declares its dependencies, then defines zmod:<name> as the
-# module body. Load order is derived from the dependency graph, not filenames.
+# A module file IS the module. Its filename is its identity; a header comment
+# describes only when it runs:
 #
-#   zmod completion --after plugins --phase defer
-#   zmod:completion() { compinit }
+#   # modules/completion.zsh
+#   #zmod after=plugins phase=defer
 #
-# Arguments:
-#   --after  A,B    run after A and B
-#   --before C,D    run before C and D
-#   --phase  sync   run before the prompt renders (default)
-#   --phase  defer  hand to zsh-defer, runs when zle is idle
+#   compinit
+#   ...
 #
-# Two invariants are enforced by the loader, loudly rather than silently:
+# The loader reads just the header of every file, resolves the dependency
+# graph, then sources the files in the resolved order. Header keys:
+#
+#   after=A,B    run after A and B
+#   before=C,D   run before C and D
+#   phase=sync   run before the prompt renders (default)
+#   phase=defer  hand to zsh-defer, runs when zle is idle
+#
+# Two invariants are enforced, loudly rather than silently:
 #   1. A sync module may not depend on a defer module (the reverse is fine).
 #   2. fpath is frozen once the completion module finishes. Anything added
 #      later is never scanned by compinit — the bug class that silently broke
 #      forgit completions.
 #
+# `source` reports only a file's last command, so it cannot prove a module
+# succeeded throughout. Write fatal steps as `cmd || return 1` and let optional
+# ones fail explicitly; enabling ERR_RETURN globally would change the semantics
+# of every module.
+#
 # If zsh-defer is missing, defer modules run inline in the same order.
 
-typeset -gA _zmod_after _zmod_before _zmod_phase _zmod_status _zmod_ms
-typeset -ga _zmod_names _zmod_order
+typeset -gA _zmod_after _zmod_before _zmod_phase _zmod_status _zmod_ms _zmod_file
+typeset -ga _zmod_names _zmod_order _zmod_fpath_sealed _zmod_bad_files _zmod_bad_decls
 # No initialiser: re-sourcing this file must not reset the guard, or
 # `source ~/.zshrc` would re-run every module.
-typeset -ga _zmod_fpath_sealed _zmod_bad_files _zmod_bad_decls
 typeset -g _zmod_ran _zmod_degraded _zmod_fpath_is_sealed
-# never | preflight-failed | no-files | sourced — each state a report must be
-# able to tell apart, since 'nothing to check' is not 'everything checked'.
-typeset -g _zmod_load_state _zmod_reg_closed
+# never | preflight-failed | no-files | sourced
+typeset -g _zmod_load_state
 : ${_zmod_ran:=0} ${_zmod_degraded:=0} ${_zmod_fpath_is_sealed:=0}
-: ${_zmod_load_state:=never} ${_zmod_reg_closed:=0}
+: ${_zmod_load_state:=never}
 
-# `source` reports the status of the last command in the file, and a module
-# file ends with a function definition that always succeeds. A failed
-# declaration therefore has to record itself here rather than rely on the
-# caller noticing.
-zmod::_decl_err() {
+zmod::_hdr_err() {
   _zmod_bad_decls+=("$1")
   print -ru2 "zmod: $1"
 }
 
-zmod() {
-  # The name pattern below uses the # repetition operator. Registration happens
-  # before any module body runs, so EXTENDED_GLOB is not set yet globally.
+# Read the leading comment block of a file and register what it declares.
+# Nothing in the file is executed here.
+zmod::_read_header() {
   setopt localoptions extended_glob
-  local phase=sync
-  local -a after before
+  local _zmod_path=$1
+  local _zmod_name=${${_zmod_path:t}:r}
+  local _zmod_line _zmod_spec _zmod_kv _zmod_key _zmod_val _zmod_part
+  local _zmod_phase_val=sync
+  local -a _zmod_after_val _zmod_before_val
 
-  (( _zmod_reg_closed )) && {
-    zmod::_decl_err "'$1' declared after registration closed; modules must be declared at file scope, not from a module body"
+  [[ $_zmod_name == [A-Za-z_][A-Za-z0-9_-]# ]] || {
+    zmod::_hdr_err "${_zmod_path:t}: filename is not a usable module name (letters, digits, - and _)"
     return 1
   }
-  (( $# )) || { zmod::_decl_err "missing module name"; return 1 }
-  local name=$1; shift
-
-  # The name becomes part of a function name (zmod:<name>) and is used as an
-  # associative-array key and in pattern tests, so keep it to safe characters.
-  [[ $name == [A-Za-z_][A-Za-z0-9_-]# ]] || {
-    zmod::_decl_err "invalid module name '$name' (use letters, digits, - and _)"; return 1
+  (( ${+_zmod_phase[$_zmod_name]} )) && {
+    zmod::_hdr_err "${_zmod_path:t}: duplicate module name '$_zmod_name'"
+    return 1
   }
-  (( ${+_zmod_phase[$name]} )) && { zmod::_decl_err "duplicate module '$name'"; return 1 }
 
-  local phase_seen=0 dep
-  local -a parts
-  while (( $# )); do
-    # Validate before shifting: `shift 2` with one argument left fails without
-    # consuming anything, which turns this loop into an infinite one at startup.
-    case $1 in
-      --after|--before|--phase)
-        (( $# >= 2 )) || { zmod::_decl_err "$name: $1 requires a value"; return 1 } ;;
-      *) zmod::_decl_err "$name: unknown argument '$1'"; return 1 ;;
-    esac
+  while IFS= read -r _zmod_line; do
+    [[ $_zmod_line == '#zmod'(| *) ]] && { _zmod_spec=${_zmod_line#\#zmod}; break }
+    [[ $_zmod_line == \#* || -z ${_zmod_line// } ]] && continue
+    break                       # first real line: the header block is over
+  done < $_zmod_path
 
-    # A malformed dependency list must not silently degrade into "no
-    # dependency" — that removes an ordering constraint the author intended.
-    if [[ $1 == --after || $1 == --before ]]; then
-      [[ -n $2 ]] || { zmod::_decl_err "$name: $1 has an empty value"; return 1 }
-      parts=("${(@s:,:)2}")
-      # Quote the expansion: an unquoted array in a for loop drops empty
-      # elements, which would skip exactly the entries being checked for.
-      for dep in "${parts[@]}"; do
-        [[ -n $dep ]] || { zmod::_decl_err "$name: $1 '$2' has an empty entry"; return 1 }
-      done
-    fi
+  [[ -n ${_zmod_spec-} || $_zmod_line == '#zmod'(| *) ]] || {
+    zmod::_hdr_err "${_zmod_path:t}: no '#zmod' header line"
+    return 1
+  }
 
-    case $1 in
-      --after)  after+=($parts)  ;;
-      --before) before+=($parts) ;;
-      --phase)
-        (( phase_seen )) && { zmod::_decl_err "$name: --phase given more than once"; return 1 }
-        phase_seen=1
-        [[ $2 == sync || $2 == defer ]] || {
-          zmod::_decl_err "$name: --phase must be sync or defer, got '$2'"; return 1
+  for _zmod_kv in ${=_zmod_spec}; do
+    [[ $_zmod_kv == *=* ]] || {
+      zmod::_hdr_err "$_zmod_name: '$_zmod_kv' is not key=value"; return 1
+    }
+    _zmod_key=${_zmod_kv%%=*} _zmod_val=${_zmod_kv#*=}
+    [[ -n $_zmod_val ]] || { zmod::_hdr_err "$_zmod_name: '$_zmod_key' has an empty value"; return 1 }
+
+    case $_zmod_key in
+      after|before)
+        # An unquoted array in a for loop drops empty elements, which would
+        # skip exactly the entries being checked for.
+        local -a _zmod_parts=("${(@s:,:)_zmod_val}")
+        for _zmod_part in "${_zmod_parts[@]}"; do
+          [[ -n $_zmod_part ]] || {
+            zmod::_hdr_err "$_zmod_name: $_zmod_key='$_zmod_val' has an empty entry"; return 1
+          }
+        done
+        [[ $_zmod_key == after ]] && _zmod_after_val+=($_zmod_parts) \
+                                  || _zmod_before_val+=($_zmod_parts) ;;
+      phase)
+        [[ $_zmod_val == sync || $_zmod_val == defer ]] || {
+          zmod::_hdr_err "$_zmod_name: phase must be sync or defer, got '$_zmod_val'"; return 1
         }
-        phase=$2 ;;
+        _zmod_phase_val=$_zmod_val ;;
+      *) zmod::_hdr_err "$_zmod_name: unknown header key '$_zmod_key'"; return 1 ;;
     esac
-    shift 2
   done
 
-  _zmod_names+=($name)
-  _zmod_after[$name]=${(j:,:)after}
-  _zmod_before[$name]=${(j:,:)before}
-  _zmod_phase[$name]=$phase
+  _zmod_names+=($_zmod_name)
+  _zmod_file[$_zmod_name]=$_zmod_path
+  _zmod_after[$_zmod_name]=${(j:,:)_zmod_after_val}
+  _zmod_before[$_zmod_name]=${(j:,:)_zmod_before_val}
+  _zmod_phase[$_zmod_name]=$_zmod_phase_val
 }
 
 # Resolve the dependency graph into _zmod_order. Non-zero on failure.
@@ -113,13 +118,13 @@ zmod::resolve() {
 
   for n in $_zmod_names; do indeg[$n]=0; edges[$n]=""; done
 
-  # --after X  => X runs before this module
-  # --before Y => this module runs before Y
+  # after=X  => X runs before this module
+  # before=Y => this module runs before Y
   for n in $_zmod_names; do
     for dep in ${(s:,:)_zmod_after[$n]}; do
       [[ -n $dep ]] || continue
       (( ${+_zmod_phase[$dep]} )) || {
-        print -ru2 "zmod: '$n' depends on unknown module '$dep' (--after)"; return 1
+        print -ru2 "zmod: '$n' depends on unknown module '$dep' (after=)"; return 1
       }
       [[ ${_zmod_phase[$n]} == sync && ${_zmod_phase[$dep]} == defer ]] && {
         print -ru2 "zmod: sync module '$n' cannot depend on defer module '$dep'"; return 1
@@ -130,10 +135,10 @@ zmod::resolve() {
     for dep in ${(s:,:)_zmod_before[$n]}; do
       [[ -n $dep ]] || continue
       (( ${+_zmod_phase[$dep]} )) || {
-        print -ru2 "zmod: '$n' references unknown module '$dep' (--before)"; return 1
+        print -ru2 "zmod: '$n' references unknown module '$dep' (before=)"; return 1
       }
       [[ ${_zmod_phase[$dep]} == sync && ${_zmod_phase[$n]} == defer ]] && {
-        print -ru2 "zmod: defer module '$n' declares --before sync module '$dep', unsatisfiable"; return 1
+        print -ru2 "zmod: defer module '$n' declares before=$dep, a sync module: unsatisfiable"; return 1
       }
       edges[$n]+="$dep "
       (( indeg[$dep]++ ))
@@ -166,51 +171,79 @@ zmod::resolve() {
 
 # export VAR=${VAR:-default} has a trap: once a parent shell exports the old
 # default, exec zsh inherits it and the new default never applies — you need a
-# brand new terminal. Use this instead; zdoctor reports the mismatch.
+# brand new terminal. Warn at the moment it happens rather than waiting for
+# someone to think of running a diagnostic.
 typeset -gA _zmod_env_want
 zmod::env_default() {
   local var=$1 val=$2
   _zmod_env_want[$var]=$val
   export $var=${(P)var:-$val}
+  [[ ${(P)var} == $val ]] || print -ru2 \
+    "zmod: $var is '${(P)var}' inherited from a parent shell, config wants '$val' — exec zsh cannot change it, open a new terminal"
+  return 0
 }
 
-# A conditional alias fails silently: when the command is not on PATH the alias
-# is simply never defined, which is indistinguishable from a config that never
-# wanted it. Declaring the intent makes the gap checkable.
+# A conditional alias fails silently: when the command is absent the alias is
+# simply never defined, which is indistinguishable from a config that never
+# wanted it. Declaring the intent lets the mismatch be reported.
 typeset -gA _zmod_alias_want
 zmod::alias_if() {
   local cmd=$1 name=$2 body=$3
   _zmod_alias_want[$name]=$cmd
-  (( $+commands[$cmd] )) && alias $name="$body"
+  (( $+commands[$cmd] )) || return 0
+  alias $name="$body"
+  [[ -n ${aliases[$name]} ]] || print -ru2 \
+    "zmod: $cmd is installed but alias '$name' was not defined"
   return 0
 }
 
-zmod::_run_one() {
-  local n=$1 t0
-  if ! (( ${+functions[zmod:$n]} )); then
-    _zmod_status[$n]=missing
-    print -ru2 "zmod: module '$n' is declared but zmod:$n is not defined"
+# Deliberately no `emulate -L zsh` and no LOCAL_OPTIONS: those would undo any
+# setopt a module performs. Locals are _zmod_-prefixed so a module sourced into
+# this scope cannot collide with them.
+zmod::_run_file() {
+  local _zmod_n=$1 _zmod_t0 _zmod_timing=0
+  local _zmod_f=${_zmod_file[$_zmod_n]}
+
+  [[ -r $_zmod_f ]] && {
+    # Without zsh/datetime EPOCHREALTIME is unset and arithmetic silently
+    # yields 0, so every module would report 0.0ms. Say so instead.
+    [[ -n $ZSH_TRACE ]] && (( ${+EPOCHREALTIME} )) && { _zmod_timing=1; _zmod_t0=$EPOCHREALTIME }
+  }
+
+  if [[ ! -r $_zmod_f ]]; then
+    _zmod_status[$_zmod_n]=missing
+    print -ru2 "zmod: module file for '$_zmod_n' is unreadable: $_zmod_f"
     return 1
   fi
-  # Without zsh/datetime EPOCHREALTIME is unset and arithmetic silently yields
-  # 0, so every module would be reported as taking 0.0ms. Say so instead.
-  local timing=0
-  [[ -n $ZSH_TRACE ]] && (( ${+EPOCHREALTIME} )) && { timing=1; t0=$EPOCHREALTIME }
 
-  if zmod:$n; then _zmod_status[$n]=ok; else _zmod_status[$n]=failed; fi
+  # Aliases are expanded when a file is parsed, and modules are parsed as they
+  # run — so anything after the aliases module would inherit the user's
+  # interactive aliases (rm -i, grep --colour, mv -v). The previous
+  # function-wrapper design was immune only by accident: bodies were parsed
+  # before any alias existed. Module code should behave like a script.
+  # Toggled by hand rather than via LOCAL_OPTIONS, which would also undo any
+  # setopt the module performs.
+  local -i _zmod_aliases_on=0
+  [[ -o aliases ]] && _zmod_aliases_on=1
+  unsetopt aliases
 
-  if (( timing )); then
-    _zmod_ms[$n]=$(( (EPOCHREALTIME - t0) * 1000 ))
-    printf '%-6s %7.1fms  %s\n' ${_zmod_phase[$n]} ${_zmod_ms[$n]} $n
+  source $_zmod_f
+  local -i _zmod_rc=$?
+
+  (( _zmod_aliases_on )) && setopt aliases
+  (( _zmod_rc == 0 )) && _zmod_status[$_zmod_n]=ok || _zmod_status[$_zmod_n]=failed
+
+  if (( _zmod_timing )); then
+    _zmod_ms[$_zmod_n]=$(( (EPOCHREALTIME - _zmod_t0) * 1000 ))
+    printf '%-6s %7.1fms  %s\n' ${_zmod_phase[$_zmod_n]} ${_zmod_ms[$_zmod_n]} $_zmod_n
   elif [[ -n $ZSH_TRACE ]]; then
-    printf '%-6s %9s  %s\n' ${_zmod_phase[$n]} 'no clock' $n
+    printf '%-6s %9s  %s\n' ${_zmod_phase[$_zmod_n]} 'no clock' $_zmod_n
   fi
 }
 
 # Called by the completion module once it is done. Anything that touches fpath
-# after this point has completions that compinit will never see.
-# The snapshot is kept as an array; serialising it to a delimited string would
-# break on any path containing the delimiter.
+# after this point has completions compinit will never see. Kept as an array;
+# serialising to a delimited string breaks on a path containing the delimiter.
 zmod::seal_fpath() { _zmod_fpath_sealed=($fpath); _zmod_fpath_is_sealed=1 }
 
 zmod::check_fpath() {
@@ -236,66 +269,44 @@ zmod::check_fpath() {
   (( $#added ))   && print -ru2 "      added:   ${(j:\n               :)added}"
   (( $#removed )) && print -ru2 "      removed: ${(j:\n               :)removed}"
   (( $#added || $#removed )) || print -ru2 "      reordered (same entries, different precedence)"
-  print -ru2 "      fix: give the module that modifies fpath '--before completion'"
+  print -ru2 "      fix: give the module that modifies fpath 'before=completion'"
   return 1
 }
 
 zmod::load() {
-  # Re-sourcing a newer lib into a shell that already loaded resets the new
-  # bookkeeping variables while _zmod_ran survives, so close registration here
-  # too: otherwise late zmod() calls would be accepted and never run.
-  (( _zmod_ran )) && {
-    _zmod_reg_closed=1
-    print -ru2 "zmod: already loaded, ignoring repeat call"
-    return 0
-  }
+  (( _zmod_ran )) && { print -ru2 "zmod: already loaded, ignoring repeat call"; return 0 }
 
-  # Diagnostic state, recorded before anything can fail: a load that dies in
-  # preflight must not be reported as never attempted, nor as having read
-  # every module file cleanly.
+  # Guards are set only once loading is certain to proceed; setting them before
+  # the checks would make a failed load permanent, with no way to retry in the
+  # same shell after correcting it.
   _zmod_load_state=preflight-failed
-
-  # The _zmod_ran / _zmod_reg_closed guards are set only once loading is
-  # certain to proceed. Setting them before the checks would make a failed load
-  # permanent: a corrected retry in the same shell could not recover.
   [[ -n $ZDOTDIR && -d $ZDOTDIR/modules ]] || {
     print -ru2 "zmod: \$ZDOTDIR/modules not found (ZDOTDIR='${ZDOTDIR}') — nothing loaded"
     return 1
   }
 
-  # A module file that fails to source registers nothing. Without reporting it,
-  # its absence only shows up later as a missing-dependency error somewhere
-  # else, or not at all if nothing depends on it.
   local m
   local -i read_count=0
   _zmod_bad_files=() _zmod_bad_decls=()
-  for m in $ZDOTDIR/modules/*.zsh(N); do
+  for m in $ZDOTDIR/modules/*.zsh(N-.); do
     (( read_count++ ))
-    source $m || _zmod_bad_files+=(${m:t})
+    zmod::_read_header $m
   done
   (( read_count )) && _zmod_load_state=sourced || _zmod_load_state=no-files
 
-  (( $#_zmod_bad_files )) && \
-    print -ru2 "zmod: these module files failed to source: ${(j:, :)_zmod_bad_files}"
-
-  # Bail out before closing registration, so a corrected retry in the same
-  # shell can still declare modules.
-  (( $#_zmod_names )) || { print -ru2 "zmod: no modules found in $ZDOTDIR/modules"; return 1 }
-
-  # Declarations are only valid while module files are being read. A zmod()
-  # call after this point would register a module the resolver has already
-  # finished with: it would never run and never be reported.
-  _zmod_reg_closed=1
+  (( $#_zmod_names )) || {
+    print -ru2 "zmod: no usable modules in $ZDOTDIR/modules"
+    return 1
+  }
   _zmod_ran=1
 
-  # A resolution failure must not brick the shell — otherwise you are stuck
-  # repairing the config from a shell with no aliases and no completion.
-  # Fall back to declaration order; the fpath guard still runs and zdoctor
-  # reports the degraded state.
+  # A resolution failure must not brick the shell — otherwise you are repairing
+  # the config from a shell with no aliases and no completion. Fall back to
+  # declaration order; the fpath guard still runs.
   if ! zmod::resolve; then
     _zmod_degraded=1
     _zmod_order=($_zmod_names)
-    print -ru2 "zmod: falling back to declaration order; run zdoctor for details"
+    print -ru2 "zmod: falling back to declaration order; ordering is not guaranteed"
   fi
 
   [[ -n $ZSH_TRACE ]] && zmodload zsh/datetime
@@ -303,24 +314,23 @@ zmod::load() {
   local -a deferred
   for m in $_zmod_order; do
     if [[ ${_zmod_phase[$m]} == sync ]]; then
-      zmod::_run_one $m
+      zmod::_run_file $m || _zmod_bad_files+=(${_zmod_file[$m]:t})
     else
       deferred+=($m)
     fi
   done
 
   # zsh-defer enables all its actions by default, and actions 1 and 2 redirect
-  # stdout and stderr to /dev/null. Without -1 -2 every diagnostic this loader
-  # emits from a deferred module is discarded.
+  # stdout and stderr to /dev/null. Without -1 -2 every diagnostic a deferred
+  # module emits is discarded.
   for m in $deferred; do
     if (( ${+functions[zsh-defer]} )); then
-      zsh-defer -1 -2 -m -p -c "zmod::_run_one $m"
+      zsh-defer -1 -2 -m -p -c "zmod::_run_file ${(q)m}"
     else
-      zmod::_run_one $m
+      zmod::_run_file $m || _zmod_bad_files+=(${_zmod_file[$m]:t})
     fi
   done
 
-  # Verify invariants once every deferred module has run.
   if (( ${+functions[zsh-defer]} )); then
     zsh-defer -1 -2 -m -p -c 'zmod::check_fpath'
   else
