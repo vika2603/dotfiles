@@ -36,12 +36,19 @@ zmod() {
   (( ${+_zmod_phase[$name]} )) && { print -ru2 "zmod: duplicate module '$name'"; return 1 }
 
   while (( $# )); do
+    # Validate before shifting: `shift 2` with one argument left fails without
+    # consuming anything, which turns this loop into an infinite one at startup.
     case $1 in
-      --after)  after+=(${(s:,:)2});  shift 2 ;;
-      --before) before+=(${(s:,:)2}); shift 2 ;;
-      --phase)  phase=$2;             shift 2 ;;
+      --after|--before|--phase)
+        (( $# >= 2 )) || { print -ru2 "zmod: $name: $1 requires a value"; return 1 } ;;
       *) print -ru2 "zmod: $name: unknown argument '$1'"; return 1 ;;
     esac
+    case $1 in
+      --after)  after+=(${(s:,:)2})  ;;
+      --before) before+=(${(s:,:)2}) ;;
+      --phase)  phase=$2             ;;
+    esac
+    shift 2
   done
 
   [[ $phase == sync || $phase == defer ]] || {
@@ -156,8 +163,10 @@ zmod::check_fpath() {
 
 zmod::load() {
   (( _zmod_ran )) && { print -ru2 "zmod: already loaded, ignoring repeat call"; return 0 }
-  _zmod_ran=1
 
+  # Set the guard only once loading is certain to proceed. Setting it before
+  # the checks would make a failed load permanent — a corrected retry in the
+  # same shell would be refused as "already loaded".
   [[ -n $ZDOTDIR && -d $ZDOTDIR/modules ]] || {
     print -ru2 "zmod: \$ZDOTDIR/modules not found (ZDOTDIR='${ZDOTDIR}') — nothing loaded"
     return 1
@@ -166,6 +175,7 @@ zmod::load() {
   local m
   for m in $ZDOTDIR/modules/*.zsh(N); do source $m; done
   (( $#_zmod_names )) || { print -ru2 "zmod: no modules found in $ZDOTDIR/modules"; return 1 }
+  _zmod_ran=1
 
   # A resolution failure must not brick the shell — otherwise you are stuck
   # repairing the config from a shell with no aliases and no completion.

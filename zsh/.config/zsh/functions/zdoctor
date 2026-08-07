@@ -54,13 +54,14 @@ else
 fi
 # Only meaningful once the module responsible has actually run — reporting FAIL
 # for work that is merely pending trains you to ignore this output.
-if [[ ${_zmod_status[completion]} != ok ]]; then
-  print -P "  %F{yellow}--%f   completion table: completion module has not run yet"
-elif (( ${#_comps} )); then
-  print -P "  %F{green}ok%f   completion table populated (${#_comps} entries)"
-else
-  print -P "  %F{red}FAIL%f completion table is empty"
-fi
+case ${_zmod_status[completion]:-pending} in
+  ok) (( ${#_comps} )) \
+        && print -P "  %F{green}ok%f   completion table populated (${#_comps} entries)" \
+        || print -P "  %F{red}FAIL%f completion module ran but the table is empty" ;;
+  failed|missing)
+      print -P "  %F{red}FAIL%f completion module ${_zmod_status[completion]}; completions unavailable" ;;
+  *)  print -P "  %F{yellow}--%f   completion table: module still pending" ;;
+esac
 
 local -a broken
 for m in $_zmod_names; do
@@ -88,8 +89,10 @@ fi
 
 print -P "\n%BCaches%b"
 local cc=${XDG_CACHE_HOME:-$HOME/.cache}/zsh/carapace.zsh
-if [[ ${_zmod_status[carapace]} != ok ]]; then
-  print -P "  %F{yellow}--%f   carapace: module has not run yet"
+if [[ ${_zmod_status[carapace]:-pending} == (failed|missing) ]]; then
+  print -P "  %F{red}FAIL%f carapace module ${_zmod_status[carapace]}"
+elif [[ ${_zmod_status[carapace]} != ok ]]; then
+  print -P "  %F{yellow}--%f   carapace: module still pending"
 elif [[ ! -r $cc || ! -r $cc.sig ]]; then
   print -P "  %F{yellow}--%f   carapace cache absent"
 elif [[ "$(< $cc.sig)" == "${CARAPACE_BRIDGES}|${CARAPACE_EXCLUDES}" ]]; then

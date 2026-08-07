@@ -3,8 +3,10 @@
 `.zshrc` does two things: source `lib/zmod.zsh` and call `zmod::load`. The real
 configuration lives in `modules/`.
 
-Load order is derived from **dependency declarations**, not filenames. Renaming
-a module file does not change behaviour.
+Load order is derived from **dependency declarations**. Any two modules with a
+dependency between them keep that order regardless of filename. Modules with no
+declared relationship fall back to the order the files are read in, so renaming
+can still reorder unrelated modules — if the order matters, declare it.
 
 ## What a module looks like
 
