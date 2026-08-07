@@ -1,176 +1,133 @@
-# Report the state of the module system: what loaded, in what order, and
-# whether the loader's invariants still hold.
+# Health check for the shell configuration.
+#
+#   zdoctor      report problems, or one line saying there are none
+#   zdoctor -v   also print the module graph and loader bookkeeping
+#
+# The default output answers "is anything wrong", not "what did the loader do".
+# Checks are about capabilities that should exist, so they can catch a module
+# that returned success without actually having an effect.
 emulate -L zsh
 
-# Without the loader in this shell every variable below is unset, and an unset
-# variable must not be read as a healthy state.
 (( ${+functions[zmod::load]} )) || {
   print -P "%F{red}zmod is not loaded in this shell%f — source \$ZDOTDIR/lib/zmod.zsh first"
   return 1
 }
 
-local m dep line
+local verbose=0
+[[ $1 == (-v|--verbose) ]] && verbose=1
 
-if (( _zmod_degraded )); then
-  print -P "%F{red}%BDEGRADED%b%f dependency resolution failed; declaration order in use"
-  print -P "%F{red}         the zmod: error printed at startup names the bad dependency%f\n"
-fi
+local -a problems notes
+local m name cmd
 
-# Execution is partitioned by phase: every sync module runs, then every defer
-# module. Within a phase the resolved order holds.
-local -a sync_mods defer_mods
-for m in $_zmod_order; do
-  [[ ${_zmod_phase[$m]} == sync ]] && sync_mods+=($m) || defer_mods+=($m)
-done
-
-zdoctor::_row() {
-  local m=$1
-  line="  ${(r:20:)m}"
-  case ${_zmod_status[$m]:-pending} in
-    ok)      line+=" %F{green}ok     %f" ;;
-    failed)  line+=" %F{red}FAILED %f" ;;
-    missing) line+=" %F{red}MISSING%f" ;;
-    *)       line+=" %F{yellow}pending%f" ;;
-  esac
-  dep=""
-  [[ -n ${_zmod_after[$m]}  ]] && dep+=" after:${_zmod_after[$m]}"
-  [[ -n ${_zmod_before[$m]} ]] && dep+=" before:${_zmod_before[$m]}"
-  [[ -n $dep ]] && line+=" %F{242}${dep}%f"
-  [[ -n ${_zmod_ms[$m]} ]] && line+=$(printf ' %F{242}%.1fms%%f' ${_zmod_ms[$m]})
-  print -P -- $line
-}
-
-if (( ! $#_zmod_order )); then
-  print -P "%BModules%b  %F{red}not resolved — zmod::load did not complete%f"
-else
-  print -P "%BModules%b (${#_zmod_names})  sync phase runs first, then defer"
-  print -P "%F{242}  sync%f"
-  for m in $sync_mods;  do zdoctor::_row $m; done
-  print -P "%F{242}  defer%f"
-  for m in $defer_mods; do zdoctor::_row $m; done
-fi
-unfunction zdoctor::_row
-
-print -P "\n%BInvariants%b"
-if (( ! _zmod_fpath_is_sealed )); then
-  case ${_zmod_status[completion]:-pending} in
-    ok)             print -P "  %F{red}FAIL%f completion module ran but never sealed fpath" ;;
-    failed|missing) print -P "  %F{red}FAIL%f fpath never sealed: completion module ${_zmod_status[completion]}" ;;
-    *)              print -P "  %F{yellow}--%f   fpath not sealed yet: completion module still pending" ;;
-  esac
-elif zmod::check_fpath 2>/dev/null; then
-  print -P "  %F{green}ok%f   fpath unchanged since it was sealed"
-else
-  print -P "  %F{red}FAIL%f fpath changed after sealing — see the zmod: error above"
-fi
-# Only meaningful once the module responsible has actually run — reporting FAIL
-# for work that is merely pending trains you to ignore this output.
-case ${_zmod_status[completion]:-pending} in
-  ok) (( ${#_comps} )) \
-        && print -P "  %F{green}ok%f   completion table populated (${#_comps} entries)" \
-        || print -P "  %F{red}FAIL%f completion module ran but the table is empty" ;;
-  failed|missing)
-      print -P "  %F{red}FAIL%f completion module ${_zmod_status[completion]}; completions unavailable" ;;
-  *)  print -P "  %F{yellow}--%f   completion table: module still pending" ;;
-esac
-
-# Vacuously true over an empty set, so say nothing ran rather than print a
-# green tick that is backed by no module at all.
-local -a broken ran
+# --- modules ----------------------------------------------------------------
+local -a broken ran pending
 for m in $_zmod_names; do
   case ${_zmod_status[$m]} in
-    failed|missing) broken+=($m) ;;
-    ok)             ran+=($m) ;;
+    failed)  broken+=("$m (returned non-zero)") ;;
+    missing) broken+=("$m (no zmod:$m defined)") ;;
+    ok)      ran+=($m) ;;
+    *)       pending+=($m) ;;
   esac
 done
-if (( $#broken )); then
-  print -P "  %F{red}FAIL%f modules did not complete: ${(j:, :)broken}"
-elif (( $#ran )); then
-  print -P "  %F{green}ok%f   all ${#ran} modules that ran returned success"
-else
-  print -P "  %F{yellow}--%f   no module has run yet"
+(( _zmod_degraded )) && problems+=("modules|dependency resolution failed; declaration order in use")
+for m in $broken; do problems+=("module|$m"); done
+(( $#_zmod_bad_files )) && problems+=("modules|files returned non-zero: ${(j:, :)_zmod_bad_files}")
+(( $#_zmod_bad_decls )) && problems+=("modules|rejected declarations: ${(j:; :)_zmod_bad_decls}")
+[[ ${_zmod_load_state:-never} == sourced ]] || \
+  problems+=("modules|load state is ${_zmod_load_state:-never}, not a completed load")
+
+# --- fpath / completions ----------------------------------------------------
+if (( _zmod_fpath_is_sealed )); then
+  zmod::check_fpath 2>/dev/null || problems+=("fpath|changed after compinit; those completions are unregistered")
+elif [[ ${_zmod_status[completion]} == (failed|missing) ]]; then
+  problems+=("fpath|never sealed: completion module ${_zmod_status[completion]}")
 fi
 
-case ${_zmod_load_state:-never} in
-  never)            print -P "  %F{yellow}--%f   module files: zmod::load was never called" ;;
-  preflight-failed) print -P "  %F{red}FAIL%f no module files were read: \$ZDOTDIR/modules unusable" ;;
-  no-files)         print -P "  %F{red}FAIL%f \$ZDOTDIR/modules contains no .zsh files" ;;
-  sourced)
-    # 'returned zero' is the whole claim: source reports only the status of the
-    # last command in a file, so a mid-file failure is invisible here. The
-    # declaration line below is the one that actually inspects content.
-    (( $#_zmod_bad_files )) \
-      && print -P "  %F{red}FAIL%f module files that returned non-zero: ${(j:, :)_zmod_bad_files}" \
-      || print -P "  %F{green}ok%f   every module file returned zero" ;;
-  # Success must be an explicit state, never the fallthrough: an unrecognised
-  # value is a state nothing here has evidence about.
-  *) print -P "  %F{red}FAIL%f unknown load state '$_zmod_load_state'" ;;
-esac
-if [[ ${_zmod_load_state:-never} == sourced ]]; then
-  if (( $#_zmod_bad_decls )); then
-    print -P "  %F{red}FAIL%f rejected declarations: ${(j:; :)_zmod_bad_decls}"
-  elif (( $#_zmod_names )); then
-    print -P "  %F{green}ok%f   all ${#_zmod_names} declarations accepted"
-  else
-    print -P "  %F{red}FAIL%f module files were read but declared nothing"
-  fi
-fi
-
-print -P "\n%BEnvironment defaults%b"
-if (( ${#_zmod_env_want} )); then
-  local var stale=0
-  for var in ${(ok)_zmod_env_want}; do
-    if [[ ${(P)var} == ${_zmod_env_want[$var]} ]]; then
-      print -P "  %F{green}ok%f   ${(r:22:)var} ${(P)var}"
-    else
-      stale=1
-      print -P "  %F{red}FAIL%f ${(r:22:)var} live '${(P)var}' != config '${_zmod_env_want[$var]}'"
-    fi
+# Every file in completions/ names the command it completes, so the directory
+# itself says what should be registered. No hardcoded list to drift.
+if [[ ${_zmod_status[completion]} == ok ]]; then
+  (( ${#_comps} )) || problems+=("completion|compinit ran but the table is empty")
+  local f
+  for f in $ZDOTDIR/completions/_*(N-.); do
+    name=${${f:t}#_}
+    [[ -n ${_comps[$name]} ]] || problems+=("completion|${f:t} is present but '$name' has no completion")
   done
-  (( stale )) && print -P "       %F{yellow}inherited from a parent shell; exec zsh cannot override it, open a new terminal%f"
-else
-  print -P "  %F{yellow}--%f   none recorded yet"
 fi
 
-print -P "\n%BCaches%b"
+# --- declared intent that can fail silently ---------------------------------
+for name in ${(ok)_zmod_alias_want}; do
+  cmd=${_zmod_alias_want[$name]}
+  if (( ! $+commands[$cmd] )); then
+    notes+=("$name|$cmd is not installed, alias skipped")
+  elif [[ -z ${aliases[$name]} ]]; then
+    problems+=("$name|$cmd is installed but the alias was never defined")
+  fi
+done
+
+for name in ${(ok)_zmod_env_want}; do
+  [[ ${(P)name} == ${_zmod_env_want[$name]} ]] || \
+    problems+=("$name|inherited '${(P)name}', config wants '${_zmod_env_want[$name]}'; needs a new terminal")
+done
+
+# --- caches: informational, they rebuild themselves -------------------------
 local cc=${XDG_CACHE_HOME:-$HOME/.cache}/zsh/carapace.zsh
-if [[ ${_zmod_status[carapace]:-pending} == (failed|missing) ]]; then
-  print -P "  %F{red}FAIL%f carapace module ${_zmod_status[carapace]}"
-elif [[ ${_zmod_status[carapace]} != ok ]]; then
-  print -P "  %F{yellow}--%f   carapace: module still pending"
-elif [[ ! -r $cc || ! -r $cc.sig ]]; then
-  print -P "  %F{yellow}--%f   carapace cache absent"
-elif [[ "$(< $cc.sig)" == "${CARAPACE_BRIDGES}|${CARAPACE_EXCLUDES}" ]]; then
-  print -P "  %F{green}ok%f   carapace"
-else
-  print -P "  %F{yellow}--%f   carapace stale, rebuilds next start"
-fi
-# `a -nt b` is false when either file is missing, so a bare -nt test reports a
-# green tick for a comparison it could not make.
-local manifest=$ZDOTDIR/.zsh_plugins.txt bundle=$ZDOTDIR/.zsh_plugins.zsh
-if [[ ${_zmod_status[plugin-manager]:-pending} == (failed|missing) ]]; then
-  print -P "  %F{red}FAIL%f antidote: plugin-manager module ${_zmod_status[plugin-manager]}"
-elif [[ ${_zmod_status[plugin-manager]} != ok ]]; then
-  print -P "  %F{yellow}--%f   antidote: module still pending"
-elif [[ ! -r $manifest ]]; then
-  print -P "  %F{red}FAIL%f antidote manifest missing: ${manifest:t}"
-elif [[ ! -r $bundle ]]; then
-  print -P "  %F{yellow}--%f   antidote bundle absent, builds next start"
-elif [[ $manifest -nt $bundle ]]; then
-  print -P "  %F{yellow}--%f   antidote bundle stale, rebuilds next start"
-else
-  print -P "  %F{green}ok%f   antidote bundle"
-fi
+[[ ${_zmod_status[carapace]} == ok && -r $cc && -r $cc.sig \
+   && "$(< $cc.sig)" != "${CARAPACE_BRIDGES}|${CARAPACE_EXCLUDES}" ]] && \
+  notes+=("carapace|cache signature stale, rebuilds next start")
+[[ ${_zmod_status[plugin-manager]} == ok && -r $ZDOTDIR/.zsh_plugins.txt \
+   && $ZDOTDIR/.zsh_plugins.txt -nt $ZDOTDIR/.zsh_plugins.zsh ]] && \
+  notes+=("antidote|bundle stale, rebuilds next start")
+[[ -r $ZDOTDIR/.zcompdump && -d $ZDOTDIR/completions \
+   && ! $ZDOTDIR/.zcompdump -nt $ZDOTDIR/completions ]] && \
+  notes+=("compdump|older than completions/; rm \$ZDOTDIR/.zcompdump && exec zsh")
 
-local dump=$ZDOTDIR/.zcompdump
-if [[ ! -r $dump ]]; then
-  print -P "  %F{yellow}--%f   .zcompdump absent, rebuilds on next compinit"
-elif [[ ! -d $ZDOTDIR/completions ]]; then
-  print -P "  %F{yellow}--%f   .zcompdump present, no completions/ to compare against"
-elif [[ $dump -nt $ZDOTDIR/completions ]]; then
-  print -P "  %F{green}ok%f   .zcompdump newer than completions/"
-else
-  print -P "  %F{yellow}--%f   .zcompdump older than completions/; rm it and exec zsh"
-fi
+# --- report -----------------------------------------------------------------
+zdoctor::_lines() {
+  local entry
+  for entry in "$@"; do
+    printf '  %s%-10s%s %s\n' $'\e[2m' ${entry%%|*} $'\e[0m' ${entry#*|}
+  done
+}
 
+if (( $#problems )); then
+  print -P "%F{red}zsh: ${#problems} problem$( (( $#problems > 1 )) && print s )%f"
+  zdoctor::_lines "${problems[@]}"
+else
+  print -P "%F{green}zsh: ok%f — ${#ran} modules, ${#_comps} completions$( (( $#pending )) && print ", ${#pending} deferred still pending")"
+fi
+(( $#notes )) && { print -P "%F{yellow}notes%f"; zdoctor::_lines "${notes[@]}" }
+unfunction zdoctor::_lines
+
+(( verbose )) || { (( $#problems )) && print -P "%F{242}  zdoctor -v for the module graph%f"; return }
+
+# --- verbose: loader internals ----------------------------------------------
+print -P "\n%BModules%b (${#_zmod_names})  every sync module runs, then every defer module"
+local phase line dep
+for phase in sync defer; do
+  print -P "%F{242}  $phase%f"
+  for m in $_zmod_order; do
+    [[ ${_zmod_phase[$m]} == $phase ]] || continue
+    line="  ${(r:20:)m}"
+    case ${_zmod_status[$m]:-pending} in
+      ok)      line+=" %F{green}ok     %f" ;;
+      failed)  line+=" %F{red}FAILED %f" ;;
+      missing) line+=" %F{red}MISSING%f" ;;
+      *)       line+=" %F{yellow}pending%f" ;;
+    esac
+    dep=""
+    [[ -n ${_zmod_after[$m]}  ]] && dep+=" after:${_zmod_after[$m]}"
+    [[ -n ${_zmod_before[$m]} ]] && dep+=" before:${_zmod_before[$m]}"
+    [[ -n $dep ]] && line+=" %F{242}$dep%f"
+    [[ -n ${_zmod_ms[$m]} ]] && line+=$(printf ' %F{242}%.1fms%%f' ${_zmod_ms[$m]})
+    print -P -- $line
+  done
+done
+
+print -P "\n%BLoader%b"
+printf '  %-20s %s\n' 'load state'   "${_zmod_load_state:-never}"
+printf '  %-20s %s\n' 'registration' "$( (( _zmod_reg_closed )) && print closed || print open )"
+printf '  %-20s %s\n' 'fpath'        "$( (( _zmod_fpath_is_sealed )) \
+  && print "sealed, ${#_zmod_fpath_sealed} entries" || print 'not sealed' )"
+printf '  %-20s %s\n' 'declarations' "${#_zmod_names} accepted, ${#_zmod_bad_decls} rejected"
+printf '  %-20s %s\n' 'files'        "${#_zmod_bad_files} returned non-zero"
 print -P "\n%F{242}ZSH_TRACE=1 exec zsh   per-module timings%f"

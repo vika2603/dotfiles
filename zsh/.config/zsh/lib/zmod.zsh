@@ -174,6 +174,17 @@ zmod::env_default() {
   export $var=${(P)var:-$val}
 }
 
+# A conditional alias fails silently: when the command is not on PATH the alias
+# is simply never defined, which is indistinguishable from a config that never
+# wanted it. Declaring the intent makes the gap checkable.
+typeset -gA _zmod_alias_want
+zmod::alias_if() {
+  local cmd=$1 name=$2 body=$3
+  _zmod_alias_want[$name]=$cmd
+  (( $+commands[$cmd] )) && alias $name="$body"
+  return 0
+}
+
 zmod::_run_one() {
   local n=$1 t0
   if ! (( ${+functions[zmod:$n]} )); then

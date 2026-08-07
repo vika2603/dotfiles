@@ -3,8 +3,8 @@
 zmod aliases --after tools
 
 zmod:aliases() {
-  (( $+commands[eza] )) && alias ls='eza -bh --icons --hyperlink'
-  (( $+commands[bat] )) && alias cat='bat --plain'
+  zmod::alias_if eza ls  'eza -bh --icons --hyperlink'
+  zmod::alias_if bat cat 'bat --plain'
 
   alias l='ls -l'    ll='ls -la'   lt='ls --tree'
 

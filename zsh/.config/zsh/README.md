@@ -76,10 +76,23 @@ mismatch.
 ## Troubleshooting
 
 ```sh
-zdoctor              # module graph, invariants, completion and alias spot checks,
-                     # environment drift, cache freshness
+zdoctor              # problems only, or one line saying there are none
+zdoctor -v           # also the module graph and loader state
 ZSH_TRACE=1 exec zsh # per-module timings
 ```
+
+`zdoctor` checks capabilities rather than loader bookkeeping, so it catches a
+module that returned success without having any effect:
+
+- every file in `completions/` actually registered its command
+- every alias declared with `zmod::alias_if` exists when its command does
+- every `zmod::env_default` value matches what the config asked for
+- fpath unchanged since compinit, no failed modules or rejected declarations
+
+Adding a conditionally-defined alias with `zmod::alias_if <cmd> <name> <body>`
+rather than a bare `(( $+commands[x] )) && alias` is what makes the first two
+checkable — a plain conditional alias that never fires is indistinguishable
+from one that was never wanted.
 
 `exec zsh` picks up most changes. Two cases need a brand new terminal:
 
