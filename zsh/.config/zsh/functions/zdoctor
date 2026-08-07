@@ -47,6 +47,7 @@ unfunction zdoctor::_row
 print -P "\n%BInvariants%b"
 if (( ! _zmod_fpath_is_sealed )); then
   case ${_zmod_status[completion]:-pending} in
+    ok)             print -P "  %F{red}FAIL%f completion module ran but never sealed fpath" ;;
     failed|missing) print -P "  %F{red}FAIL%f fpath never sealed: completion module ${_zmod_status[completion]}" ;;
     *)              print -P "  %F{yellow}--%f   fpath not sealed yet: completion module still pending" ;;
   esac
@@ -74,9 +75,16 @@ done
   && print -P "  %F{red}FAIL%f modules did not complete: ${(j:, :)broken}" \
   || print -P "  %F{green}ok%f   every module that ran returned success"
 
-(( $#_zmod_bad_files )) \
-  && print -P "  %F{red}FAIL%f module files that failed to load: ${(j:, :)_zmod_bad_files}" \
-  || print -P "  %F{green}ok%f   every module file sourced cleanly"
+if (( ! _zmod_load_attempted )); then
+  print -P "  %F{yellow}--%f   module files: zmod::load was never called"
+else
+  (( $#_zmod_bad_files )) \
+    && print -P "  %F{red}FAIL%f module files that failed to source: ${(j:, :)_zmod_bad_files}" \
+    || print -P "  %F{green}ok%f   every module file sourced cleanly"
+  (( $#_zmod_bad_decls )) \
+    && print -P "  %F{red}FAIL%f rejected declarations: ${(j:; :)_zmod_bad_decls}" \
+    || print -P "  %F{green}ok%f   every declaration accepted"
+fi
 
 print -P "\n%BEnvironment defaults%b"
 if (( ${#_zmod_env_want} )); then

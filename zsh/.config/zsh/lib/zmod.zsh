@@ -24,9 +24,20 @@ typeset -gA _zmod_after _zmod_before _zmod_phase _zmod_status _zmod_ms
 typeset -ga _zmod_names _zmod_order
 # No initialiser: re-sourcing this file must not reset the guard, or
 # `source ~/.zshrc` would re-run every module.
-typeset -ga _zmod_fpath_sealed _zmod_bad_files
+typeset -ga _zmod_fpath_sealed _zmod_bad_files _zmod_bad_decls
 typeset -g _zmod_ran _zmod_degraded _zmod_fpath_is_sealed
+typeset -g _zmod_load_attempted _zmod_reg_closed
 : ${_zmod_ran:=0} ${_zmod_degraded:=0} ${_zmod_fpath_is_sealed:=0}
+: ${_zmod_load_attempted:=0} ${_zmod_reg_closed:=0}
+
+# `source` reports the status of the last command in the file, and a module
+# file ends with a function definition that always succeeds. A failed
+# declaration therefore has to record itself here rather than rely on the
+# caller noticing.
+zmod::_decl_err() {
+  _zmod_bad_decls+=("$1")
+  print -ru2 "zmod: $1"
+}
 
 zmod() {
   # The name pattern below uses the # repetition operator. Registration happens
@@ -35,15 +46,19 @@ zmod() {
   local phase=sync
   local -a after before
 
-  (( $# )) || { print -ru2 "zmod: missing module name"; return 1 }
+  (( _zmod_reg_closed )) && {
+    zmod::_decl_err "'$1' declared after registration closed; modules must be declared at file scope, not from a module body"
+    return 1
+  }
+  (( $# )) || { zmod::_decl_err "missing module name"; return 1 }
   local name=$1; shift
 
   # The name becomes part of a function name (zmod:<name>) and is used as an
   # associative-array key and in pattern tests, so keep it to safe characters.
   [[ $name == [A-Za-z_][A-Za-z0-9_-]# ]] || {
-    print -ru2 "zmod: invalid module name '$name' (use letters, digits, - and _)"; return 1
+    zmod::_decl_err "invalid module name '$name' (use letters, digits, - and _)"; return 1
   }
-  (( ${+_zmod_phase[$name]} )) && { print -ru2 "zmod: duplicate module '$name'"; return 1 }
+  (( ${+_zmod_phase[$name]} )) && { zmod::_decl_err "duplicate module '$name'"; return 1 }
 
   local phase_seen=0 dep
   local -a parts
@@ -52,19 +67,19 @@ zmod() {
     # consuming anything, which turns this loop into an infinite one at startup.
     case $1 in
       --after|--before|--phase)
-        (( $# >= 2 )) || { print -ru2 "zmod: $name: $1 requires a value"; return 1 } ;;
-      *) print -ru2 "zmod: $name: unknown argument '$1'"; return 1 ;;
+        (( $# >= 2 )) || { zmod::_decl_err "$name: $1 requires a value"; return 1 } ;;
+      *) zmod::_decl_err "$name: unknown argument '$1'"; return 1 ;;
     esac
 
     # A malformed dependency list must not silently degrade into "no
     # dependency" — that removes an ordering constraint the author intended.
     if [[ $1 == --after || $1 == --before ]]; then
-      [[ -n $2 ]] || { print -ru2 "zmod: $name: $1 has an empty value"; return 1 }
+      [[ -n $2 ]] || { zmod::_decl_err "$name: $1 has an empty value"; return 1 }
       parts=("${(@s:,:)2}")
       # Quote the expansion: an unquoted array in a for loop drops empty
       # elements, which would skip exactly the entries being checked for.
       for dep in "${parts[@]}"; do
-        [[ -n $dep ]] || { print -ru2 "zmod: $name: $1 '$2' has an empty entry"; return 1 }
+        [[ -n $dep ]] || { zmod::_decl_err "$name: $1 '$2' has an empty entry"; return 1 }
       done
     fi
 
@@ -72,10 +87,10 @@ zmod() {
       --after)  after+=($parts)  ;;
       --before) before+=($parts) ;;
       --phase)
-        (( phase_seen )) && { print -ru2 "zmod: $name: --phase given more than once"; return 1 }
+        (( phase_seen )) && { zmod::_decl_err "$name: --phase given more than once"; return 1 }
         phase_seen=1
         [[ $2 == sync || $2 == defer ]] || {
-          print -ru2 "zmod: $name: --phase must be sync or defer, got '$2'"; return 1
+          zmod::_decl_err "$name: --phase must be sync or defer, got '$2'"; return 1
         }
         phase=$2 ;;
     esac
@@ -223,16 +238,24 @@ zmod::load() {
     return 1
   }
 
+  _zmod_load_attempted=1
+
   # A module file that fails to source registers nothing. Without reporting it,
   # its absence only shows up later as a missing-dependency error somewhere
   # else, or not at all if nothing depends on it.
   local m
-  _zmod_bad_files=()
+  _zmod_bad_files=() _zmod_bad_decls=()
   for m in $ZDOTDIR/modules/*.zsh(N); do
     source $m || _zmod_bad_files+=(${m:t})
   done
+
+  # Declarations are only valid while module files are being read. A zmod()
+  # call after this point would register a module the resolver has already
+  # finished with: it would never run and never be reported.
+  _zmod_reg_closed=1
+
   (( $#_zmod_bad_files )) && \
-    print -ru2 "zmod: these module files failed to load: ${(j:, :)_zmod_bad_files}"
+    print -ru2 "zmod: these module files failed to source: ${(j:, :)_zmod_bad_files}"
   (( $#_zmod_names )) || { print -ru2 "zmod: no modules found in $ZDOTDIR/modules"; return 1 }
   _zmod_ran=1
 
