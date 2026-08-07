@@ -117,11 +117,32 @@ elif [[ "$(< $cc.sig)" == "${CARAPACE_BRIDGES}|${CARAPACE_EXCLUDES}" ]]; then
 else
   print -P "  %F{yellow}--%f   carapace stale, rebuilds next start"
 fi
-[[ $ZDOTDIR/.zsh_plugins.txt -nt $ZDOTDIR/.zsh_plugins.zsh ]] \
-  && print -P "  %F{yellow}--%f   antidote bundle stale, rebuilds next start" \
-  || print -P "  %F{green}ok%f   antidote bundle"
-[[ $ZDOTDIR/.zcompdump -nt $ZDOTDIR/completions ]] \
-  && print -P "  %F{green}ok%f   .zcompdump newer than completions/" \
-  || print -P "  %F{yellow}--%f   .zcompdump older than completions/; rm it and exec zsh"
+# `a -nt b` is false when either file is missing, so a bare -nt test reports a
+# green tick for a comparison it could not make.
+local manifest=$ZDOTDIR/.zsh_plugins.txt bundle=$ZDOTDIR/.zsh_plugins.zsh
+if [[ ${_zmod_status[plugin-manager]:-pending} == (failed|missing) ]]; then
+  print -P "  %F{red}FAIL%f antidote: plugin-manager module ${_zmod_status[plugin-manager]}"
+elif [[ ${_zmod_status[plugin-manager]} != ok ]]; then
+  print -P "  %F{yellow}--%f   antidote: module still pending"
+elif [[ ! -r $manifest ]]; then
+  print -P "  %F{red}FAIL%f antidote manifest missing: ${manifest:t}"
+elif [[ ! -r $bundle ]]; then
+  print -P "  %F{yellow}--%f   antidote bundle absent, builds next start"
+elif [[ $manifest -nt $bundle ]]; then
+  print -P "  %F{yellow}--%f   antidote bundle stale, rebuilds next start"
+else
+  print -P "  %F{green}ok%f   antidote bundle"
+fi
+
+local dump=$ZDOTDIR/.zcompdump
+if [[ ! -r $dump ]]; then
+  print -P "  %F{yellow}--%f   .zcompdump absent, rebuilds on next compinit"
+elif [[ ! -d $ZDOTDIR/completions ]]; then
+  print -P "  %F{yellow}--%f   .zcompdump present, no completions/ to compare against"
+elif [[ $dump -nt $ZDOTDIR/completions ]]; then
+  print -P "  %F{green}ok%f   .zcompdump newer than completions/"
+else
+  print -P "  %F{yellow}--%f   .zcompdump older than completions/; rm it and exec zsh"
+fi
 
 print -P "\n%F{242}ZSH_TRACE=1 exec zsh   per-module timings%f"
