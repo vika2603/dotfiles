@@ -249,14 +249,17 @@ zmod::load() {
     source $m || _zmod_bad_files+=(${m:t})
   done
 
+  (( $#_zmod_bad_files )) && \
+    print -ru2 "zmod: these module files failed to source: ${(j:, :)_zmod_bad_files}"
+
+  # Bail out before closing registration, so a corrected retry in the same
+  # shell can still declare modules.
+  (( $#_zmod_names )) || { print -ru2 "zmod: no modules found in $ZDOTDIR/modules"; return 1 }
+
   # Declarations are only valid while module files are being read. A zmod()
   # call after this point would register a module the resolver has already
   # finished with: it would never run and never be reported.
   _zmod_reg_closed=1
-
-  (( $#_zmod_bad_files )) && \
-    print -ru2 "zmod: these module files failed to source: ${(j:, :)_zmod_bad_files}"
-  (( $#_zmod_names )) || { print -ru2 "zmod: no modules found in $ZDOTDIR/modules"; return 1 }
   _zmod_ran=1
 
   # A resolution failure must not brick the shell — otherwise you are stuck
